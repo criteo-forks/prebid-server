@@ -1,0 +1,7 @@
+maintainer:
+  email: "pi-direct@criteo.com"
+capabilities:
+  app:
+    mediaTypes:
+      - banner
+      - native
