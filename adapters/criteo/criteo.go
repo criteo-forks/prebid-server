@@ -2,16 +2,16 @@ package criteo
 
 import (
 	"encoding/json"
-	"net/http"
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
 	"github.com/prebid/prebid-server/openrtb_ext"
+	"net/http"
 )
 
 // TODO: (26/04/2018) The profileId is temporary and should be updated soon
 const CRITEO_URL = "https://bidder.criteo.com/cdb?profileId=154"
 
-type CriteoAdapter struct {}
+type CriteoAdapter struct{}
 
 // Criteo bidder request and response structures
 type CriteoRequest struct {
@@ -67,8 +67,8 @@ func (a *CriteoAdapter) MakeRequests(request *openrtb.BidRequest) ([]*adapters.R
 			BundleId: request.App.Bundle,
 		},
 		User: CriteoUser{
-			DeviceId: request.Device.IFA,
-			DeviceOs: request.Device.OS,
+			DeviceId:     request.Device.IFA,
+			DeviceOs:     request.Device.OS,
 			DeviceIdType: getDeviceType(request.Device.OS),
 		},
 		Slots: getRequestSlots(request.Imp),
@@ -78,9 +78,9 @@ func (a *CriteoAdapter) MakeRequests(request *openrtb.BidRequest) ([]*adapters.R
 	}
 
 	rqData := adapters.RequestData{
-		Method: "POST",
-		Uri: CRITEO_URL,
-		Body: rqjson,
+		Method:  "POST",
+		Uri:     CRITEO_URL,
+		Body:    rqjson,
 		Headers: http.Header{},
 	}
 	return []*adapters.RequestData{&rqData}, nil
@@ -88,13 +88,13 @@ func (a *CriteoAdapter) MakeRequests(request *openrtb.BidRequest) ([]*adapters.R
 
 func getDeviceType(os string) string {
 	deviceType := map[string]string{
-		"ios": "idfa",
+		"ios":     "idfa",
 		"android": "gaid",
 	}
 
 	dtype, ok := deviceType[os]
 	if !ok {
-		return "unknown_device_type";
+		return "unknown_device_type"
 	}
 	return dtype
 }
@@ -102,7 +102,7 @@ func getDeviceType(os string) string {
 func getRequestSlots(impressions []openrtb.Imp) []CriteoRequestSlot {
 	var slots []CriteoRequestSlot
 
-	for _, imp := range(impressions) {
+	for _, imp := range impressions {
 		var bidderExt adapters.ExtImpBidder
 		var criteoExt openrtb_ext.ExtImpCriteo
 
@@ -111,7 +111,7 @@ func getRequestSlots(impressions []openrtb.Imp) []CriteoRequestSlot {
 		json.Unmarshal(bidderExt.Bidder, &criteoExt)
 
 		slots = append(slots, CriteoRequestSlot{
-			ImpId: imp.ID,
+			ImpId:  imp.ID,
 			ZoneId: criteoExt.ZoneId,
 		})
 	}
@@ -122,10 +122,10 @@ func (a *CriteoAdapter) MakeBids(
 	internalRequest *openrtb.BidRequest,
 	externalRequest *adapters.RequestData,
 	response *adapters.ResponseData,
-)(
+) (
 	[]*adapters.TypedBid,
 	[]error,
-){
+) {
 	if response.StatusCode == http.StatusNoContent {
 		return nil, nil
 	}
@@ -139,21 +139,21 @@ func (a *CriteoAdapter) MakeBids(
 
 	// map[ImpId] => GenImpId
 	var genImpId = make(map[string]string)
-	for _, slot := range(bidResp.Exd.Slots) {
+	for _, slot := range bidResp.Exd.Slots {
 		genImpId[slot.ImpId] = slot.GenImpId
 	}
 
 	var bids []*adapters.TypedBid
 	// TODO - support native bids (openrtb_ext.BidTypeNative)
-	for _, slot := range(bidResp.Slots) {
+	for _, slot := range bidResp.Slots {
 		bid := adapters.TypedBid{
 			Bid: &openrtb.Bid{
-				ID: genImpId[slot.ImpId],
+				ID:    genImpId[slot.ImpId],
 				ImpID: slot.ImpId,
 				Price: slot.Cpm,
-				AdM: slot.Creative,
-				W: uint64(slot.Width),
-				H: uint64(slot.Height),
+				AdM:   slot.Creative,
+				W:     uint64(slot.Width),
+				H:     uint64(slot.Height),
 			},
 			BidType: openrtb_ext.BidTypeBanner,
 		}
