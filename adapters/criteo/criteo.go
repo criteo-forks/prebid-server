@@ -162,6 +162,7 @@ func (a *CriteoAdapter) MakeBids(
 	return bids, nil
 }
 
+// TODO NewCriteoBidder should take configuration parameters
 func NewCriteoBidder() *CriteoAdapter {
 	return &CriteoAdapter{}
 }
