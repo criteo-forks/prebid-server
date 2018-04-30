@@ -22,7 +22,7 @@ type CriteoRequest struct {
 
 type CriteoResponse struct {
 	Slots []CriteoResponseSlot `json:"slots"`
-	Exd   []CriteoExtension    `json:"exd"`
+	Exd   CriteoExtension      `json:"exd"`
 }
 
 type CriteoPublisher struct {
@@ -57,7 +57,7 @@ type CriteoExtension struct {
 
 type CriteoExtensionSlot struct {
 	GenImpId string `json:"imp_id"`
-	ImpId    string `json:"ad_unid_id`
+	ImpId    string `json:"ad_unit_id"`
 	ZoneId   uint   `json:"zone_id"`
 }
 
@@ -126,7 +126,40 @@ func (a *CriteoAdapter) MakeBids(
 	[]*adapters.TypedBid,
 	[]error,
 ){
-	return nil, nil
+	if response.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	// TODO = Handle more bad response.StatusCode
+
+	var bidResp CriteoResponse
+	// TODO - Handle unmarshalling errors
+	if err := json.Unmarshal(response.Body, &bidResp); err != nil {
+		return nil, []error{err}
+	}
+
+	// map[ImpId] => GenImpId
+	var genImpId = make(map[string]string)
+	for _, slot := range(bidResp.Exd.Slots) {
+		genImpId[slot.ImpId] = slot.GenImpId
+	}
+
+	var bids []*adapters.TypedBid
+	// TODO - support native bids (openrtb_ext.BidTypeNative)
+	for _, slot := range(bidResp.Slots) {
+		bid := adapters.TypedBid{
+			Bid: &openrtb.Bid{
+				ID: genImpId[slot.ImpId],
+				ImpID: slot.ImpId,
+				Price: slot.Cpm,
+				AdM: slot.Creative,
+				W: uint64(slot.Width),
+				H: uint64(slot.Height),
+			},
+			BidType: openrtb_ext.BidTypeBanner,
+		}
+		bids = append(bids, &bid)
+	}
+	return bids, nil
 }
 
 func NewCriteoBidder() *CriteoAdapter {
