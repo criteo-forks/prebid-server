@@ -1,0 +1,86 @@
+{
+    "mockBidRequest": {
+      "id": "test-request-id",
+      "app": {
+        "bundle": "test.app.bundle"
+      },
+      "device": {
+        "ifa": "test-ifa-123456",
+        "os": "android",
+        "ip": "91.199.242.236",
+        "ua": "random user agent"
+      },
+      "imp": [
+        {
+          "id": "test-imp-id",
+          "banner": {},
+          "ext": {
+            "bidder": {
+              "zoneid": 123456
+            }
+          }
+        }
+      ]
+    },
+    "httpCalls": [
+      {
+        "expectedRequest": {
+          "uri": "https://bidder.criteo.com/cdb?profileId=230",
+          "headers": {
+            "X-Client-IP": ["91.199.242.236"],
+            "User-Agent": ["random user agent"]
+          },
+          "body": {
+            "id": "test-request-id",
+            "publisher": {
+              "bundleid": "test.app.bundle"
+            },
+            "user": {
+              "deviceid": "test-ifa-123456",
+              "deviceos": "android",
+              "deviceidtype": "gaid",
+              "ip": "91.199.242.236",
+              "ua": "random user agent"
+            },
+            "slots": [
+              {
+                "impid": "test-imp-id",
+                "zoneid": 123456
+              }
+            ]
+          }
+        },
+        "mockResponse": {
+          "status": 200,
+          "body": {
+            "id": "test-request-id",
+            "slots": [
+              {
+                "impid": "test-imp-id",
+                "zoneid": 123456,
+                "cpm": 0.1,
+                "currency": "USD",
+                "width": 300,
+                "height": 250,
+                "creative": "<iframe id='789abc' name='789abc' src='http://creative-url.criteo.com'></iframe>"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "expectedBids": [
+      {
+        "bid": {
+          "id": "0123456789abcdef",
+          "impid": "test-imp-id",
+          "price": 0.1,
+          "adm": "<iframe id='789abc' name='789abc' src='http://creative-url.criteo.com'></iframe>",
+          "w": 300,
+          "h": 250
+        },
+        "type": "banner"
+      }
+    ]
+  }
+  

@@ -1,0 +1,64 @@
+{
+  "mockBidRequest": {
+    "id": "test-request-id",
+    "site": {
+      "page": "www.abcd.com/posts/123"
+    },
+    "imp": [
+      {
+        "id": "test-imp-id",
+        "banner": {
+          "format": [{"w": 728, "h": 90}]
+        },
+        "ext": {
+          "bidder": {
+            "zoneid": 123456
+          }
+        }
+      }
+    ],
+    "user": {
+      "buyeruid": "00000000-0000-0000-0000-00000000",
+      "geo": {
+        "country": "US"
+      }
+    },
+    "device": {
+      "ip": "91.199.242.236",
+      "ua": "random user agent"
+    }
+  },
+  "httpCalls": [
+    {
+      "expectedRequest": {
+        "uri": "https://bidder.criteo.com/cdb?profileId=230",
+        "headers": {
+          "Cookie": ["uid=00000000-0000-0000-0000-00000000"],
+          "X-Client-IP": ["91.199.242.236"],
+          "User-Agent": ["random user agent"]
+        },
+        "body": {
+          "id": "test-request-id",
+          "publisher": {
+            "url": "www.abcd.com/posts/123"
+          },
+          "user": {
+            "cookieuid": "00000000-0000-0000-0000-00000000",
+            "ip": "91.199.242.236",
+            "ua": "random user agent"
+          },
+          "slots": [
+            {
+              "impid": "test-imp-id",
+              "zoneid": 123456
+            }
+          ]
+        }
+      },
+      "mockResponse": {
+        "status": 204
+      }
+    }
+  ],
+  "expectedBids": []
+}
