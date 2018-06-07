@@ -296,6 +296,8 @@ func SetupViper(v *viper.Viper) {
 	v.SetDefault("adapters.conversant.usersync_url", "http://prebid-match.dotomi.com/prebid/match?rurl=")
 	v.SetDefault("adapters.brightroll.endpoint", "http://east-bid.ybp.yahoo.com/bid/appnexuspbs")
 	v.SetDefault("adapters.brightroll.usersync_url", "http://east-bid.ybp.yahoo.com/sync/appnexuspbs?gdpr={{gdpr}}&euconsent={{gdpr_consent}}&url=")
+	v.SetDefault("adapters.criteo.endpoint", "http://bidder.criteo.com/cdb?profileId=230")
+	v.SetDefault("adapters.criteo.usersync_url", "")
 
 	v.SetDefault("max_request_size", 1024*256)
 	v.SetDefault("analytics.file.filename", "")

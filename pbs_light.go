@@ -648,6 +648,8 @@ func main() {
 		glog.Fatalf("Configuration could not be loaded or did not pass validation: %v", err)
 	}
 
+	// TODO: Remove, DEBUG
+
 	if err := serve(cfg); err != nil {
 		glog.Errorf("prebid-server failed: %v", err)
 	}
