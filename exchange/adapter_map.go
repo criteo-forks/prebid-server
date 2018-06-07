@@ -10,6 +10,7 @@ import (
 	"github.com/prebid/prebid-server/adapters/audienceNetwork"
 	"github.com/prebid/prebid-server/adapters/brightroll"
 	"github.com/prebid/prebid-server/adapters/conversant"
+	"github.com/prebid/prebid-server/adapters/criteo"
 	"github.com/prebid/prebid-server/adapters/eplanning"
 	"github.com/prebid/prebid-server/adapters/indexExchange"
 	"github.com/prebid/prebid-server/adapters/lifestreet"
@@ -50,5 +51,6 @@ func newAdapterMap(client *http.Client, cfg *config.Configuration) map[openrtb_e
 			cfg.Adapters["rubicon"].XAPI.Password, cfg.Adapters["rubicon"].XAPI.Tracker), client),
 		openrtb_ext.BidderSomoaudience: adaptBidder(somoaudience.NewSomoaudienceBidder(), client),
 		openrtb_ext.BidderSovrn:        adaptBidder(sovrn.NewSovrnBidder(client, cfg.Adapters["sovrn"].Endpoint), client),
+		openrtb_ext.BidderCriteo:       adaptBidder(criteo.NewCriteoBidder(client, cfg.Adapters["criteo"].Endpoint), client),
 	}
 }

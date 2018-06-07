@@ -116,6 +116,7 @@ func (bidder *bidderAdapter) requestBid(ctx context.Context, request *openrtb.Bi
 
 		if httpInfo.err == nil {
 			bidResponse, moreErrs := bidder.Bidder.MakeBids(request, httpInfo.request, httpInfo.response)
+			fmt.Println(string(httpInfo.response.Body))
 			errs = append(errs, moreErrs...)
 			if bidResponse != nil {
 				for i := 0; i < len(bidResponse.Bids); i++ {
