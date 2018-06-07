@@ -1,0 +1,33 @@
+{
+  "mockBidRequest": {
+    "id": "test-request-id",
+    "site": {
+      "page": "www.abcd.com/posts/123"
+    },
+    "imp": [
+      {
+        "id": "test-imp-id",
+        "banner": {
+          "format": [{"w": 728, "h": 90}]
+        },
+        "ext": {
+          "bidder": {
+            "zoneid": 123456
+          }
+        }
+      }
+    ],
+    "user": {
+      "buyeruid": "00000000-0000-0000-0000-00000000",
+      "geo": {
+        "country": "US"
+      }
+    },
+    "device": {
+      "ip": "91.199.242.236",
+      "ua": "random user agent"
+    }
+  },
+  "httpCalls": [],
+  "expectedBids": []
+}
