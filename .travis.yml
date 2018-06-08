@@ -1,7 +1,8 @@
 language: go
+
 go:
-    - "1.9"
-    - "1.10"
+    - '1.9'
+    - '1.10'
 
 env:
     - DEP_VERSION="0.4.1"
@@ -9,9 +10,26 @@ env:
 before_install:
     - curl -L -s https://github.com/golang/dep/releases/download/v${DEP_VERSION}/dep-linux-amd64 -o $GOPATH/bin/dep
     - chmod +x $GOPATH/bin/dep
+    - go get github.com/mitchellh/gox
 
 install:
-    - dep ensure
+    - $GOPATH/bin/dep ensure
 
 script:
-    - ./validate.sh --nofmt --cov --race 10
+    - "./validate.sh --nofmt --cov --race 10"
+    - gox -os="linux" -arch="386" -output="{{.Dir}}_{{.OS}}_{{.Arch}}" -ldflags "-X main.Rev=`git rev-parse --short HEAD`" -verbose ./...;
+
+deploy:
+  provider: releases
+  skip_cleanup: true
+  api_key:
+    secure: $GITHUB_DEPLOY_ENCRYPTED_API_KEY
+  file:
+    - prebid-server_linux_386
+  on:
+    repo: criteo-forks/prebid-server
+    tags: true
+    branch:
+        - master
+        - criteo
+        - publishing-releases-binaries
