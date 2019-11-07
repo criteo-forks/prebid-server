@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"fmt"
+	"github.com/prebid/prebid-server/adapters/criteo"
 	"net/http"
 	"strings"
 
@@ -135,6 +136,7 @@ func newAdapterMap(client *http.Client, cfg *config.Configuration, infos adapter
 		openrtb_ext.BidderConnectAd:    connectad.NewConnectAdBidder(cfg.Adapters[string(openrtb_ext.BidderConnectAd)].Endpoint),
 		openrtb_ext.BidderConsumable:   consumable.NewConsumableBidder(cfg.Adapters[string(openrtb_ext.BidderConsumable)].Endpoint),
 		openrtb_ext.BidderConversant:   conversant.NewConversantBidder(cfg.Adapters[string(openrtb_ext.BidderConversant)].Endpoint),
+		openrtb_ext.BidderCriteo:       criteo.NewCriteoBidder(client, cfg.Adapters[string(openrtb_ext.BidderCriteo)].Endpoint),
 		openrtb_ext.BidderCpmstar:      cpmstar.NewCpmstarBidder(cfg.Adapters[string(openrtb_ext.BidderCpmstar)].Endpoint),
 		openrtb_ext.BidderDatablocks:   datablocks.NewDatablocksBidder(cfg.Adapters[string(openrtb_ext.BidderDatablocks)].Endpoint),
 		openrtb_ext.BidderDmx:          dmx.NewDmxBidder(cfg.Adapters[string(openrtb_ext.BidderDmx)].Endpoint),
