@@ -24,7 +24,7 @@ func (a *CriteoAdapter) MakeRequests(request *openrtb.BidRequest, reqInfo *adapt
 	}
 
 	criteoRequestBuilder, errs := getCriteoRequest(request)
-	if errs == nil || len(errs) > 0 {
+	if errs != nil {
 		return nil, errs
 	}
 
@@ -70,7 +70,7 @@ func getCriteoRequestHeaders(criteoRequest *criteoRequest) http.Header {
 			}
 
 			if criteoRequest.User.IP != nil {
-				headers.Add("X-Client-IP", *criteoRequest.User.IP)
+				headers.Add("X-Client-Ip", *criteoRequest.User.IP)
 			}
 
 			if criteoRequest.User.Ua != nil {
@@ -255,12 +255,16 @@ func (a *CriteoAdapter) MakeBids(
 
 	// TODO - support native bids (openrtb_ext.BidTypeNative)
 	for i := 0; i < len(bidResponse.Slots); i++ {
+		creative := ""
+		if bidResponse.Slots[i].Creative != nil {
+			creative = *bidResponse.Slots[i].Creative
+		}
 		bidderResponse.Bids[i] = &adapters.TypedBid{
 			Bid: &openrtb.Bid{
 				ID:    *bidResponse.Slots[i].GetID(),
 				ImpID: *bidResponse.Slots[i].ImpID,
 				Price: *bidResponse.Slots[i].Cpm,
-				AdM:   *bidResponse.Slots[i].Creative,
+				AdM:   creative,
 				W:     uint64(*bidResponse.Slots[i].Width),
 				H:     uint64(*bidResponse.Slots[i].Height),
 				CrID:  *bidResponse.Slots[i].GetCreativeID(),
