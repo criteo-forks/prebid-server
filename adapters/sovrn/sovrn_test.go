@@ -136,8 +136,10 @@ func checkHttpRequest(req http.Request, t *testing.T) {
 }
 
 func SampleSovrnRequest(numberOfImpressions int, t *testing.T) *pbs.PBSRequest {
+	dnt := int8(0)
 	device := openrtb.Device{
 		Language: "murican",
+		DNT:      &dnt,
 	}
 
 	user := openrtb.User{
@@ -183,19 +185,20 @@ func SampleSovrnRequest(numberOfImpressions int, t *testing.T) *pbs.PBSRequest {
 	httpReq.Header.Add("Referer", testUrl)
 	httpReq.Header.Add("User-Agent", testUserAgent)
 	httpReq.Header.Add("X-Forwarded-For", testIp)
-	pc := usersync.ParsePBSCookieFromRequest(httpReq, &config.Cookie{})
+	pc := usersync.ParsePBSCookieFromRequest(httpReq, &config.HostCookie{})
 	pc.TrySync("sovrn", testSovrnUserId)
 	fakewriter := httptest.NewRecorder()
-	pc.SetCookieOnResponse(fakewriter, "", 90*24*time.Hour)
+
+	pc.SetCookieOnResponse(fakewriter, false, &config.HostCookie{Domain: ""}, 90*24*time.Hour)
 	httpReq.Header.Add("Cookie", fakewriter.Header().Get("Set-Cookie"))
 	// parse the http request
 	cacheClient, _ := dummycache.New()
-	hcs := pbs.HostCookieSettings{}
+	hcc := config.HostCookie{}
 
 	parsedReq, err := pbs.ParsePBSRequest(httpReq, &config.AuctionTimeouts{
 		Default: 2000,
 		Max:     2000,
-	}, cacheClient, &hcs)
+	}, cacheClient, &hcc)
 	if err != nil {
 		t.Fatalf("Error when parsing request: %v", err)
 	}

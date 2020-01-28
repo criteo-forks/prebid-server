@@ -23,7 +23,11 @@ import (
 )
 
 func TestJsonSamples(t *testing.T) {
-	adapterstest.RunJSONBidderTest(t, "appnexustest", NewAppNexusBidder(nil, "http://ib.adnxs.com/openrtb2"))
+	adapterstest.RunJSONBidderTest(t, "appnexustest", NewAppNexusBidder(nil, "http://ib.adnxs.com/openrtb2", ""))
+}
+
+func TestVideoSamples(t *testing.T) {
+	adapterstest.RunJSONBidderTest(t, "appnexusplatformtest", NewAppNexusBidder(nil, "http://ib.adnxs.com/openrtb2", "8"))
 }
 
 func TestMemberQueryParam(t *testing.T) {
@@ -197,7 +201,7 @@ func DummyAppNexusServer(w http.ResponseWriter, r *http.Request) {
 			ImpID: imp.ID,
 			Price: andata.tags[i].bid,
 			AdM:   andata.tags[i].content,
-			Ext:   openrtb.RawJSON(fmt.Sprintf(`{"appnexus":{"bid_ad_type":%d}}`, bidTypeToInt(andata.tags[i].mediaType))),
+			Ext:   json.RawMessage(fmt.Sprintf(`{"appnexus":{"bid_ad_type":%d}}`, bidTypeToInt(andata.tags[i].mediaType))),
 		}
 
 		if imp.Video != nil {
@@ -298,7 +302,7 @@ func TestAppNexusBasicResponse(t *testing.T) {
 	}
 
 	conf := *adapters.DefaultHTTPAdapterConfig
-	an := NewAppNexusAdapter(&conf, server.URL)
+	an := NewAppNexusAdapter(&conf, server.URL, "")
 
 	pbin := pbs.PBSRequest{
 		AdUnits: make([]pbs.AdUnit, 2),
@@ -329,7 +333,7 @@ func TestAppNexusBasicResponse(t *testing.T) {
 				},
 			},
 			Bids: []pbs.Bids{
-				pbs.Bids{
+				{
 					BidderCode: "appnexus",
 					BidID:      fmt.Sprintf("random-id-from-pbjs-%d", i),
 					Params:     params,
@@ -360,19 +364,20 @@ func TestAppNexusBasicResponse(t *testing.T) {
 	req.Header.Add("User-Agent", andata.deviceUA)
 	req.Header.Add("X-Real-IP", andata.deviceIP)
 
-	pc := usersync.ParsePBSCookieFromRequest(req, &config.Cookie{})
+	pc := usersync.ParsePBSCookieFromRequest(req, &config.HostCookie{})
 	pc.TrySync("adnxs", andata.buyerUID)
 	fakewriter := httptest.NewRecorder()
-	pc.SetCookieOnResponse(fakewriter, "", 90*24*time.Hour)
+
+	pc.SetCookieOnResponse(fakewriter, false, &config.HostCookie{Domain: ""}, 90*24*time.Hour)
 	req.Header.Add("Cookie", fakewriter.Header().Get("Set-Cookie"))
 
 	cacheClient, _ := dummycache.New()
-	hcs := pbs.HostCookieSettings{}
+	hcc := config.HostCookie{}
 
 	pbReq, err := pbs.ParsePBSRequest(req, &config.AuctionTimeouts{
 		Default: 2000,
 		Max:     2000,
-	}, cacheClient, &hcs)
+	}, cacheClient, &hcc)
 	if err != nil {
 		t.Fatalf("ParsePBSRequest failed: %v", err)
 	}

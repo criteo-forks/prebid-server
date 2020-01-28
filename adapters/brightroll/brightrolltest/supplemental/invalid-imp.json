@@ -3,11 +3,14 @@
     "id": "test-request-id",
     "ext": {
       "bidder": {
-        "publisherName": "cafemom"
+        "publisher": "cafemom"
       }
     }
   },
   "expectedMakeRequestsErrors": [
-    "No impression in the bid request"
+    {
+      "value": "No impression in the bid request",
+      "comparison": "literal"
+    }
   ]
 }

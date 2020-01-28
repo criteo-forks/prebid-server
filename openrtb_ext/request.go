@@ -21,7 +21,8 @@ type ExtRequestPrebid struct {
 
 // ExtRequestPrebidCache defines the contract for bidrequest.ext.prebid.cache
 type ExtRequestPrebidCache struct {
-	Bids *ExtRequestPrebidCacheBids `json:"bids"`
+	Bids    *ExtRequestPrebidCacheBids `json:"bids"`
+	VastXML *ExtRequestPrebidCacheVAST `json:"vastxml"`
 }
 
 // UnmarshalJSON prevents nil bids arguments.
@@ -32,8 +33,8 @@ func (ert *ExtRequestPrebidCache) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	if proxy.Bids == nil {
-		return errors.New(`request.ext.prebid.cache missing required property "bids"`)
+	if proxy.Bids == nil && proxy.VastXML == nil {
+		return errors.New(`request.ext.prebid.cache requires one of the "bids" or "vastml" properties`)
 	}
 
 	*ert = ExtRequestPrebidCache(proxy)
@@ -43,11 +44,23 @@ func (ert *ExtRequestPrebidCache) UnmarshalJSON(b []byte) error {
 // ExtRequestPrebidCacheBids defines the contract for bidrequest.ext.prebid.cache.bids
 type ExtRequestPrebidCacheBids struct{}
 
+// ExtRequestPrebidCacheVAST defines the contract for bidrequest.ext.prebid.cache.vastxml
+type ExtRequestPrebidCacheVAST struct{}
+
 // ExtRequestTargeting defines the contract for bidrequest.ext.prebid.targeting
 type ExtRequestTargeting struct {
-	PriceGranularity  PriceGranularity `json:"pricegranularity"`
-	IncludeWinners    bool             `json:"includewinners"`
-	IncludeBidderKeys bool             `json:"includebidderkeys"`
+	PriceGranularity     PriceGranularity         `json:"pricegranularity"`
+	IncludeWinners       bool                     `json:"includewinners"`
+	IncludeBidderKeys    bool                     `json:"includebidderkeys"`
+	IncludeBrandCategory *ExtIncludeBrandCategory `json:"includebrandcategory"`
+	DurationRangeSec     []int                    `json:"durationrangesec"`
+}
+
+type ExtIncludeBrandCategory struct {
+	PrimaryAdServer     int    `json:"primaryadserver"`
+	Publisher           string `json:"publisher"`
+	WithCategory        bool   `json:"withcategory"`
+	TranslateCategories *bool  `json:"translatecategories,omitempty"`
 }
 
 // Make an unmarshaller that will set a default PriceGranularity
@@ -56,7 +69,7 @@ func (ert *ExtRequestTargeting) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	// define seperate type to prevent infinite recursive calls to UnmarshalJSON
+	// define separate type to prevent infinite recursive calls to UnmarshalJSON
 	type extRequestTargetingDefaults ExtRequestTargeting
 	defaults := &extRequestTargetingDefaults{
 		PriceGranularity:  priceGranularityMed,

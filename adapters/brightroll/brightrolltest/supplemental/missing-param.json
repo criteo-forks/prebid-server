@@ -18,7 +18,7 @@
         },
         "ext": {
           "bidder": {
-            "publisherName":""
+            "publisher":""
           }
         }
 
@@ -26,6 +26,9 @@
     ]
   },
   "expectedMakeRequestsErrors": [
-    "publisherName is empty"
+    {
+      "value": "publisher is empty",
+      "comparison": "literal"
+    }
   ]
 }
