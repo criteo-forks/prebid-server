@@ -10,7 +10,6 @@ import (
 
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -19,12 +18,10 @@ type SmartAdserverAdapter struct {
 	host string
 }
 
-// Builder builds a new instance of the SmartAdserver adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &SmartAdserverAdapter{
-		host: config.Endpoint,
+func NewSmartadserverBidder(host string) *SmartAdserverAdapter {
+	return &SmartAdserverAdapter{
+		host: host,
 	}
-	return bidder, nil
 }
 
 // MakeRequests makes the HTTP requests which should be made to fetch bids.

@@ -5,11 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/prebid/prebid-server/openrtb_ext"
 	"io/ioutil"
 	"net/http"
 	"strings"
-
-	"github.com/prebid/prebid-server/openrtb_ext"
 
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
@@ -210,7 +209,7 @@ func (a *LifestreetAdapter) Call(ctx context.Context, req *pbs.PBSRequest, bidde
 	return bids, nil
 }
 
-func NewLifestreetLegacyAdapter(config *adapters.HTTPAdapterConfig, endpoint string) *LifestreetAdapter {
+func NewLifestreetAdapter(config *adapters.HTTPAdapterConfig, endpoint string) *LifestreetAdapter {
 	a := adapters.NewHTTPAdapter(config)
 	return &LifestreetAdapter{
 		http: a,

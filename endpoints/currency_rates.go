@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/prebid/prebid-server/currency"
+	"github.com/prebid/prebid-server/currencies"
 )
 
 // currencyRatesInfo holds currency rates information.
@@ -20,7 +20,7 @@ type currencyRatesInfo struct {
 }
 
 type rateConverter interface {
-	GetInfo() currency.ConverterInfo
+	GetInfo() currencies.ConverterInfo
 }
 
 // newCurrencyRatesInfo creates a new CurrencyRatesInfo instance.

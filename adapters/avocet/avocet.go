@@ -7,7 +7,6 @@ import (
 
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -117,10 +116,9 @@ func getBidType(bid openrtb.Bid, ext avocetBidExt) openrtb_ext.BidType {
 	}
 }
 
-// Builder builds a new instance of the Avocet adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &AvocetAdapter{
-		Endpoint: config.Endpoint,
+// NewAvocetAdapter returns a new AvocetAdapter using the provided endpoint.
+func NewAvocetAdapter(endpoint string) *AvocetAdapter {
+	return &AvocetAdapter{
+		Endpoint: endpoint,
 	}
-	return bidder, nil
 }

@@ -8,7 +8,6 @@ import (
 	"github.com/buger/jsonparser"
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -17,12 +16,11 @@ type ColossusAdapter struct {
 	URI string
 }
 
-// Builder builds a new instance of the Colossus adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &ColossusAdapter{
-		URI: config.Endpoint,
+// NewColossusBidder Initializes the Bidder
+func NewColossusBidder(endpoint string) *ColossusAdapter {
+	return &ColossusAdapter{
+		URI: endpoint,
 	}
-	return bidder, nil
 }
 
 // MakeRequests create bid request for colossus demand

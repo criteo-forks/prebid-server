@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prebid/prebid-server/adapters"
 	"github.com/prebid/prebid-server/stored_requests"
+	metrics "github.com/rcrowley/go-metrics"
 
 	"github.com/buger/jsonparser"
 	jsonpatch "github.com/evanphx/json-patch"
@@ -26,8 +28,8 @@ import (
 	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/exchange"
-	"github.com/prebid/prebid-server/metrics"
 	"github.com/prebid/prebid-server/openrtb_ext"
+	"github.com/prebid/prebid-server/pbsmetrics"
 	"github.com/prebid/prebid-server/stored_requests/backends/empty_fetcher"
 	"github.com/prebid/prebid-server/util/iputil"
 	"github.com/stretchr/testify/assert"
@@ -99,10 +101,6 @@ func TestJsonSampleRequests(t *testing.T) {
 		{
 			"There are both disabled and non-disabled bidders, we expect a 200",
 			"disabled/good",
-		},
-		{
-			"Requests with first party data context info found in imp[i].ext.prebid.bidder,context",
-			"first-party-data",
 		},
 	}
 	for _, test := range testSuites {
@@ -408,17 +406,8 @@ func TestExplicitUserId(t *testing.T) {
 	})
 	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
 	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
-	endpoint, _ := NewEndpoint(
-		ex,
-		newParamsValidator(t),
-		empty_fetcher.EmptyFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		cfg,
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{},
-		[]byte{},
-		openrtb_ext.BuildBidderMap())
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
+	endpoint, _ := NewEndpoint(ex, newParamsValidator(t), empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, cfg, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 
 	endpoint(httptest.NewRecorder(), request, nil)
 
@@ -436,14 +425,18 @@ func TestExplicitUserId(t *testing.T) {
 }
 
 func doRequest(t *testing.T, test testCase) (int, string) {
-	bidderInfos := getBidderInfos(test.Config.getAdaptersConfigMap(), openrtb_ext.CoreBidderNames())
-	bidderMap := exchange.GetActiveBidders(bidderInfos)
-	disabledBidders := exchange.GetDisabledBiddersErrorMessages(bidderInfos)
+	disabledBidders := map[string]string{}
+	bidderMap := exchange.DisableBidders(getBidderInfos(test.Config.getAdaptersConfigMap(), openrtb_ext.BidderList()), disabledBidders)
+
+	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
+	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
 
 	endpoint, _ := NewEndpoint(
 		&mockBidExchange{},
 		newParamsValidator(t),
 		&mockStoredReqFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{
 			MaxRequestSize:     maxSize,
@@ -453,11 +446,12 @@ func doRequest(t *testing.T, test testCase) (int, string) {
 			BlacklistedAcctMap: test.Config.getBlackListedAccountMap(),
 			AccountRequired:    test.Config.AccountRequired,
 		},
-		newTestMetrics(),
+		metrics,
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		disabledBidders,
 		[]byte(test.Config.AliasJSON),
-		bidderMap)
+		bidderMap,
+	)
 
 	request := httptest.NewRequest("POST", "/openrtb2/auction", bytes.NewReader(test.BidRequest))
 	recorder := httptest.NewRecorder()
@@ -501,26 +495,16 @@ func doBadAliasRequest(t *testing.T, filename string, expectMsg string) {
 
 	// aliasJSON lacks a comma after the "appnexus" entry so is bad JSON
 	aliasJSON := []byte(`{"ext":{"prebid":{"aliases": {"test1": "appnexus" "test2": "rubicon", "test3": "openx"}}}}`)
+	disabledBidders := map[string]string{
+		"indexExchange": "Bidder \"indexExchange\" has been deprecated and is no longer available. Please use bidder \"ix\" and note that the bidder params have changed.",
+	}
 	adaptersConfigs := make(map[string]config.Adapter)
-
-	bidderInfos := getBidderInfos(adaptersConfigs, openrtb_ext.CoreBidderNames())
-
-	bidderMap := exchange.GetActiveBidders(bidderInfos)
-	disabledBidders := exchange.GetDisabledBiddersErrorMessages(bidderInfos)
+	bidderMap := exchange.DisableBidders(getBidderInfos(adaptersConfigs, openrtb_ext.BidderList()), disabledBidders)
 
 	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
 	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
-	endpoint, _ := NewEndpoint(
-		&nobidExchange{},
-		newParamsValidator(t),
-		&mockStoredReqFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		disabledBidders,
-		aliasJSON,
-		bidderMap)
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
+	endpoint, _ := NewEndpoint(&nobidExchange{}, newParamsValidator(t), &mockStoredReqFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, &config.Configuration{MaxRequestSize: maxSize}, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), disabledBidders, aliasJSON, bidderMap)
 
 	request := httptest.NewRequest("POST", "/openrtb2/auction", bytes.NewReader(testBidRequest))
 	recorder := httptest.NewRecorder()
@@ -560,17 +544,8 @@ func getRequestPayload(t *testing.T, example []byte) []byte {
 func TestNilExchange(t *testing.T) {
 	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
 	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
-	_, err := NewEndpoint(
-		nil,
-		newParamsValidator(t),
-		empty_fetcher.EmptyFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{},
-		[]byte{},
-		openrtb_ext.BuildBidderMap())
-
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
+	_, err := NewEndpoint(nil, newParamsValidator(t), empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, &config.Configuration{MaxRequestSize: maxSize}, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 	if err == nil {
 		t.Errorf("NewEndpoint should return an error when given a nil Exchange.")
 	}
@@ -580,18 +555,8 @@ func TestNilExchange(t *testing.T) {
 func TestNilValidator(t *testing.T) {
 	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
 	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
-	_, err := NewEndpoint(
-		&nobidExchange{},
-		nil,
-		empty_fetcher.EmptyFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{},
-		[]byte{},
-		openrtb_ext.BuildBidderMap())
-
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
+	_, err := NewEndpoint(&nobidExchange{}, nil, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, &config.Configuration{MaxRequestSize: maxSize}, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 	if err == nil {
 		t.Errorf("NewEndpoint should return an error when given a nil BidderParamValidator.")
 	}
@@ -601,18 +566,8 @@ func TestNilValidator(t *testing.T) {
 func TestExchangeError(t *testing.T) {
 	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
 	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
-	endpoint, _ := NewEndpoint(
-		&brokenExchange{},
-		newParamsValidator(t),
-		empty_fetcher.EmptyFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{},
-		[]byte{},
-		openrtb_ext.BuildBidderMap())
-
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
+	endpoint, _ := NewEndpoint(&brokenExchange{}, newParamsValidator(t), empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, &config.Configuration{MaxRequestSize: maxSize}, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 	request := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, "site.json")))
 	recorder := httptest.NewRecorder()
 	endpoint(recorder, request, nil)
@@ -714,6 +669,7 @@ func TestImplicitIPsEndToEnd(t *testing.T) {
 		},
 	}
 
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
 	for _, test := range testCases {
 		exchange := &nobidExchange{}
 		cfg := &config.Configuration{
@@ -723,17 +679,7 @@ func TestImplicitIPsEndToEnd(t *testing.T) {
 				IPv6PrivateNetworksParsed: test.privateNetworksIPv6,
 			},
 		}
-		endpoint, _ := NewEndpoint(
-			exchange,
-			newParamsValidator(t),
-			&mockStoredReqFetcher{},
-			empty_fetcher.EmptyFetcher{},
-			cfg,
-			newTestMetrics(),
-			analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-			map[string]string{},
-			[]byte{},
-			openrtb_ext.BuildBidderMap())
+		endpoint, _ := NewEndpoint(exchange, newParamsValidator(t), &mockStoredReqFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, cfg, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 
 		httpReq := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, test.reqJSONFile)))
 		httpReq.Header.Set("X-Forwarded-For", test.xForwardedForHeader)
@@ -915,19 +861,10 @@ func TestImplicitDNTEndToEnd(t *testing.T) {
 		},
 	}
 
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
 	for _, test := range testCases {
 		exchange := &nobidExchange{}
-		endpoint, _ := NewEndpoint(
-			exchange,
-			newParamsValidator(t),
-			&mockStoredReqFetcher{},
-			empty_fetcher.EmptyFetcher{},
-			&config.Configuration{MaxRequestSize: maxSize},
-			newTestMetrics(),
-			analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-			map[string]string{},
-			[]byte{},
-			openrtb_ext.BuildBidderMap())
+		endpoint, _ := NewEndpoint(exchange, newParamsValidator(t), &mockStoredReqFetcher{}, empty_fetcher.EmptyFetcher{}, empty_fetcher.EmptyFetcher{}, &config.Configuration{MaxRequestSize: maxSize}, metrics, analyticsConf.NewPBSAnalytics(&config.Analytics{}), map[string]string{}, []byte{}, openrtb_ext.BidderMap)
 
 		httpReq := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, test.reqJSONFile)))
 		httpReq.Header.Set("DNT", test.dntHeader)
@@ -941,7 +878,6 @@ func TestImplicitDNTEndToEnd(t *testing.T) {
 		assert.Equal(t, test.expectedDNT, result.Device.DNT, test.description+":dnt")
 	}
 }
-
 func TestImplicitSecure(t *testing.T) {
 	httpReq := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, "site.json")))
 	httpReq.Header.Set(http.CanonicalHeaderKey("X-Forwarded-Proto"), "https")
@@ -979,19 +915,23 @@ func TestRefererParsing(t *testing.T) {
 
 // Test the stored request functionality
 func TestStoredRequests(t *testing.T) {
+	// NewMetrics() will create a new go_metrics MetricsEngine, bypassing the need for a crafted configuration set to support it.
+	// As a side effect this gives us some coverage of the go_metrics piece of the metrics engine.
+	metrics := pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{})
 	deps := &endpointDeps{
 		&nobidExchange{},
 		newParamsValidator(t),
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
+		metrics,
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1024,13 +964,14 @@ func TestOversizedRequest(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: int64(len(reqBody) - 1)},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1059,13 +1000,14 @@ func TestRequestSizeEdgeCase(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: int64(len(reqBody))},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1092,12 +1034,13 @@ func TestNoEncoding(t *testing.T) {
 		newParamsValidator(t),
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 	)
 	request := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, "site.json")))
 	recorder := httptest.NewRecorder()
@@ -1167,12 +1110,13 @@ func TestContentType(t *testing.T) {
 		newParamsValidator(t),
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 	)
 	request := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, "site.json")))
 	recorder := httptest.NewRecorder()
@@ -1184,193 +1128,69 @@ func TestContentType(t *testing.T) {
 }
 
 func TestValidateImpExt(t *testing.T) {
-	type testCase struct {
+	testCases := []struct {
 		description    string
 		impExt         json.RawMessage
 		expectedImpExt string
 		expectedErrs   []error
-	}
-	testGroups := []struct {
-		description string
-		testCases   []testCase
 	}{
 		{
-			"Empty",
-			[]testCase{
-				{
-					description:    "Empty",
-					impExt:         nil,
-					expectedImpExt: "",
-					expectedErrs:   []error{errors.New("request.imp[0].ext is required")},
-				},
-			},
+			description:    "Empty",
+			impExt:         nil,
+			expectedImpExt: "",
+			expectedErrs:   []error{errors.New("request.imp[0].ext is required")},
 		},
 		{
-			"Unknown bidder tests",
-			[]testCase{
-				{
-					description:    "Unknown Bidder only",
-					impExt:         json.RawMessage(`{"unknownbidder":{"placement_id":555}}`),
-					expectedImpExt: `{"unknownbidder":{"placement_id":555}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Unknown Prebid Ext Bidder only",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"unknownbidder":{"placement_id":555}}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"unknownbidder":{"placement_id":555}}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Unknown Prebid Ext Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"unknownbidder":{"placement_id":555}}},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"unknownbidder":{"placement_id":555}}},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Unknown Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"unknownbidder":{"placement_id":555} ,"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"unknownbidder":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Unknown Bidder + Disabled Bidder",
-					impExt:         json.RawMessage(`{"unknownbidder":{"placement_id":555},"disabledbidder":{"foo":"bar"}}`),
-					expectedImpExt: `{"unknownbidder":{"placement_id":555},"disabledbidder":{"foo":"bar"}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Unknown Bidder + Disabled Prebid Ext Bidder",
-					impExt:         json.RawMessage(`{"unknownbidder":{"placement_id":555},"prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}}}`),
-					expectedImpExt: `{"unknownbidder":{"placement_id":555},"prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-			},
+			description:    "Valid Bidder",
+			impExt:         json.RawMessage(`{"appnexus":{"placement_id":555}}`),
+			expectedImpExt: `{"appnexus":{"placement_id":555}}`,
+			expectedErrs:   []error{},
 		},
 		{
-			"Disabled bidder tests",
-			[]testCase{
-				{
-					description:    "Disabled Bidder",
-					impExt:         json.RawMessage(`{"disabledbidder":{"foo":"bar"}}`),
-					expectedImpExt: `{}`,
-					expectedErrs: []error{
-						&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."},
-						errors.New("request.imp[0].ext must contain at least one bidder"),
-					},
-					// if only bidder(s) found in request.imp[x].ext.{biddername} or request.imp[x].ext.prebid.bidder.{biddername} are disabled, return error
-				},
-				{
-					description:    "Disabled Prebid Ext Bidder",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}}}`,
-					expectedErrs: []error{
-						&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."},
-						errors.New("request.imp[0].ext must contain at least one bidder"),
-					},
-				},
-				{
-					description:    "Disabled Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"disabledbidder":{"foo":"bar"},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs: []error{
-						&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."},
-						errors.New("request.imp[0].ext must contain at least one bidder"),
-					},
-				},
-				{
-					description:    "Disabled Prebid Ext Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"context":{"data":{"keywords":"prebid server example"}}, "prebid":{"bidder":{"disabledbidder":{"foo":"bar"}}}}`,
-					expectedErrs: []error{
-						&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."},
-						errors.New("request.imp[0].ext must contain at least one bidder"),
-					},
-				},
-			},
+			description:    "Valid Bidder + Disabled Bidder",
+			impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"unknownbidder":{"foo":"bar"}}`),
+			expectedImpExt: `{"appnexus":{"placement_id":555}}`,
+			expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'unknownbidder' has been disabled."}},
 		},
 		{
-			"First Party only",
-			[]testCase{
-				{
-					description:    "First Party Data Context",
-					impExt:         json.RawMessage(`{"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs: []error{
-						errors.New("request.imp[0].ext must contain at least one bidder"),
-					},
-				},
-			},
+			description:    "Valid Bidder + Disabled Bidder + First Party Data Context",
+			impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"unknownbidder":{"foo":"bar"},"context":{"data":{"keywords":"prebid server example"}}}`),
+			expectedImpExt: `{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
+			expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'unknownbidder' has been disabled."}},
 		},
 		{
-			"Valid bidder tests",
-			[]testCase{
-				{
-					description:    "Valid bidder root ext",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555}}`,
-					expectedErrs:   []error{},
-				},
-				{
-					description:    "Valid bidder in prebid field",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555}}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id":555}}}}`,
-					expectedErrs:   []error{},
-				},
-				{
-					description:    "Valid Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{},
-				},
-				{
-					description:    "Valid Prebid Ext Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555}}} ,"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id":555}}},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{},
-				},
-				{
-					description:    "Valid Bidder + Unknown Bidder",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"unknownbidder":{"placement_id":555}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555},"unknownbidder":{"placement_id":555}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Valid Bidder + Disabled Bidder",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555}}`,
-					expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."}},
-				},
-				{
-					description:    "Valid Bidder + Disabled Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."}},
-				},
-				{
-					description:    "Valid Bidder + Disabled Bidder + Unknown Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"},"unknownbidder":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"},"unknownbidder":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-				{
-					description:    "Valid Prebid Ext Bidder + Disabled Bidder Ext",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"}}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id": 555},"disabledbidder":{"foo":"bar"}}},"appnexus":{"placement_id":555}}`,
-					expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."}},
-				},
-				{
-					description:    "Valid Prebid Ext Bidder + Disabled Ext Bidder + First Party Data Context",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"}}},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id": 555},"disabledbidder":{"foo":"bar"}}},"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
-					expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'disabledbidder' has been disabled."}},
-				},
-				{
-					description:    "Valid Prebid Ext Bidder + Disabled Ext Bidder + Unknown Ext + First Party Data Context",
-					impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"},"unknownbidder":{"placement_id":555}}},"context":{"data":{"keywords":"prebid server example"}}}`),
-					expectedImpExt: `{"context":{"data":{"keywords":"prebid server example"}},"prebid":{"bidder":{"appnexus":{"placement_id":555},"disabledbidder":{"foo":"bar"},"unknownbidder":{"placement_id":555}}}}`,
-					expectedErrs:   []error{errors.New("request.imp[0].ext contains unknown bidder: unknownbidder. Did you forget an alias in request.ext.prebid.aliases?")},
-				},
-			},
+			description:    "Valid Bidder + First Party Data Context",
+			impExt:         json.RawMessage(`{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`),
+			expectedImpExt: `{"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
+			expectedErrs:   []error{},
+		},
+		{
+			description:    "Valid Prebid Ext Bidder",
+			impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555}}}}`),
+			expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id":555}}}}`,
+			expectedErrs:   []error{},
+			// request.imp[x].ext.prebid.bidder.{biddername} is only promoted/copied to request.ext.{biddername} if there is at least one disabled bidder.
+		},
+		{
+			description:    "Valid Prebid Ext Bidder + First Party Data Context",
+			impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555}}} ,"context":{"data":{"keywords":"prebid server example"}}}`),
+			expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id":555}}},"context":{"data":{"keywords":"prebid server example"}}}`,
+			expectedErrs:   []error{},
+			// request.imp[x].ext.prebid.bidder.{biddername} is only promoted/copied to request.ext.{biddername} if there is at least one disabled bidder.
+		},
+		{
+			description:    "Valid Prebid Ext Bidder + Disabled Bidder",
+			impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555},"unknownbidder":{"foo":"bar"}}}}`),
+			expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id": 555},"unknownbidder":{"foo":"bar"}}},"appnexus":{"placement_id":555}}`,
+			expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'unknownbidder' has been disabled."}},
+			// request.imp[x].ext.prebid.bidder.{biddername} disabled bidders are not removed. if there is a disabled bidder, the valid ones are promoted/copied to request.ext.{biddername}.
+		},
+		{
+			description:    "Valid Prebid Ext Bidder + Disabled Bidder + First Party Data Context",
+			impExt:         json.RawMessage(`{"prebid":{"bidder":{"appnexus":{"placement_id":555},"unknownbidder":{"foo":"bar"}}},"context":{"data":{"keywords":"prebid server example"}}}`),
+			expectedImpExt: `{"prebid":{"bidder":{"appnexus":{"placement_id": 555},"unknownbidder":{"foo":"bar"}}},"appnexus":{"placement_id":555},"context":{"data":{"keywords":"prebid server example"}}}`,
+			expectedErrs:   []error{&errortypes.BidderTemporarilyDisabled{Message: "The bidder 'unknownbidder' has been disabled."}},
+			// request.imp[x].ext.prebid.bidder.{biddername} disabled bidders are not removed. if there is a disabled bidder, the valid ones are promoted/copied to request.ext.{biddername}.
 		},
 	}
 
@@ -1380,31 +1200,30 @@ func TestValidateImpExt(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{MaxRequestSize: int64(8096)},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{"disabledbidder": "The bidder 'disabledbidder' has been disabled."},
+		map[string]string{"unknownbidder": "The bidder 'unknownbidder' has been disabled."},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
 	}
 
-	for _, group := range testGroups {
-		for _, test := range group.testCases {
-			imp := &openrtb.Imp{Ext: test.impExt}
+	for _, test := range testCases {
+		imp := &openrtb.Imp{Ext: test.impExt}
 
-			errs := deps.validateImpExt(imp, nil, 0)
+		errs := deps.validateImpExt(imp, nil, 0)
 
-			if len(test.expectedImpExt) > 0 {
-				assert.JSONEq(t, test.expectedImpExt, string(imp.Ext), "imp.ext JSON does not match expected. Test: %s. %s\n", group.description, test.description)
-			} else {
-				assert.Empty(t, imp.Ext, "imp.ext expected to be empty but was: %s. Test: %s. %s\n", string(imp.Ext), group.description, test.description)
-			}
-			assert.Equal(t, test.expectedErrs, errs, "errs slice does not match expected. Test: %s. %s\n", group.description, test.description)
+		if len(test.expectedImpExt) > 0 {
+			assert.JSONEq(t, test.expectedImpExt, string(imp.Ext))
+		} else {
+			assert.Empty(t, imp.Ext)
 		}
+		assert.Equal(t, test.expectedErrs, errs)
 	}
 }
 
@@ -1426,13 +1245,14 @@ func TestCurrencyTrunc(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1440,19 +1260,19 @@ func TestCurrencyTrunc(t *testing.T) {
 
 	ui := uint64(1)
 	req := openrtb.BidRequest{
-		ID: "anyRequestID",
+		ID: "someID",
 		Imp: []openrtb.Imp{
 			{
-				ID: "anyImpID",
+				ID: "imp-ID",
 				Banner: &openrtb.Banner{
 					W: &ui,
 					H: &ui,
 				},
-				Ext: json.RawMessage(`{"appnexus": {"placementId": 5667}}`),
+				Ext: json.RawMessage("{\"appnexus\": {\"placementId\": 5667}}"),
 			},
 		},
 		Site: &openrtb.Site{
-			ID: "anySiteID",
+			ID: "myID",
 		},
 		Cur: []string{"USD", "EUR"},
 	}
@@ -1470,13 +1290,14 @@ func TestCCPAInvalid(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1484,10 +1305,10 @@ func TestCCPAInvalid(t *testing.T) {
 
 	ui := uint64(1)
 	req := openrtb.BidRequest{
-		ID: "anyRequestID",
+		ID: "someID",
 		Imp: []openrtb.Imp{
 			{
-				ID: "anyImpID",
+				ID: "imp-ID",
 				Banner: &openrtb.Banner{
 					W: &ui,
 					H: &ui,
@@ -1496,10 +1317,10 @@ func TestCCPAInvalid(t *testing.T) {
 			},
 		},
 		Site: &openrtb.Site{
-			ID: "anySiteID",
+			ID: "myID",
 		},
 		Regs: &openrtb.Regs{
-			Ext: json.RawMessage(`{"us_privacy": "invalid by length"}`),
+			Ext: json.RawMessage(`{"us_privacy":"invalid by length"}`),
 		},
 	}
 
@@ -1518,13 +1339,14 @@ func TestNoSaleInvalid(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1532,10 +1354,10 @@ func TestNoSaleInvalid(t *testing.T) {
 
 	ui := uint64(1)
 	req := openrtb.BidRequest{
-		ID: "anyRequestID",
+		ID: "someID",
 		Imp: []openrtb.Imp{
 			{
-				ID: "anyImpID",
+				ID: "imp-ID",
 				Banner: &openrtb.Banner{
 					W: &ui,
 					H: &ui,
@@ -1544,12 +1366,12 @@ func TestNoSaleInvalid(t *testing.T) {
 			},
 		},
 		Site: &openrtb.Site{
-			ID: "anySiteID",
+			ID: "myID",
 		},
 		Regs: &openrtb.Regs{
-			Ext: json.RawMessage(`{"us_privacy": "1NYN"}`),
+			Ext: json.RawMessage(`{"us_privacy":"1NYN"}`),
 		},
-		Ext: json.RawMessage(`{"prebid": {"nosale": ["*", "appnexus"]} }`),
+		Ext: json.RawMessage(`{"prebid":{"nosale":["*", "appnexus"]}}`),
 	}
 
 	errL := deps.validateRequest(&req)
@@ -1569,13 +1391,14 @@ func TestValidateSourceTID(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		cfg,
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1583,10 +1406,10 @@ func TestValidateSourceTID(t *testing.T) {
 
 	ui := uint64(1)
 	req := openrtb.BidRequest{
-		ID: "anyRequestID",
+		ID: "someID",
 		Imp: []openrtb.Imp{
 			{
-				ID: "anyImpID",
+				ID: "imp-ID",
 				Banner: &openrtb.Banner{
 					W: &ui,
 					H: &ui,
@@ -1595,7 +1418,10 @@ func TestValidateSourceTID(t *testing.T) {
 			},
 		},
 		Site: &openrtb.Site{
-			ID: "anySiteID",
+			ID: "myID",
+		},
+		Regs: &openrtb.Regs{
+			Ext: json.RawMessage(`{"us_privacy":"invalid by length"}`),
 		},
 	}
 
@@ -1610,13 +1436,14 @@ func TestSChainInvalid(t *testing.T) {
 		&mockStoredReqFetcher{},
 		empty_fetcher.EmptyFetcher{},
 		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
 		&config.Configuration{},
-		newTestMetrics(),
+		pbsmetrics.NewMetrics(metrics.NewRegistry(), openrtb_ext.BidderList(), config.DisabledMetrics{}),
 		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
 		map[string]string{},
 		false,
 		[]byte{},
-		openrtb_ext.BuildBidderMap(),
+		openrtb_ext.BidderMap,
 		nil,
 		nil,
 		hardcodedResponseIPValidator{response: true},
@@ -1624,10 +1451,10 @@ func TestSChainInvalid(t *testing.T) {
 
 	ui := uint64(1)
 	req := openrtb.BidRequest{
-		ID: "anyRequestID",
+		ID: "someID",
 		Imp: []openrtb.Imp{
 			{
-				ID: "anyImpID",
+				ID: "imp-ID",
 				Banner: &openrtb.Banner{
 					W: &ui,
 					H: &ui,
@@ -1636,14 +1463,17 @@ func TestSChainInvalid(t *testing.T) {
 			},
 		},
 		Site: &openrtb.Site{
-			ID: "anySiteID",
+			ID: "myID",
+		},
+		Regs: &openrtb.Regs{
+			Ext: json.RawMessage(`{"us_privacy":"abcd"}`),
 		},
 		Ext: json.RawMessage(`{"prebid":{"schains":[{"bidders":["appnexus"],"schain":{"complete":1,"nodes":[{"asi":"directseller1.com","sid":"00001","rid":"BidRequest1","hp":1}],"ver":"1.0"}}, {"bidders":["appnexus"],"schain":{"complete":1,"nodes":[{"asi":"directseller2.com","sid":"00002","rid":"BidRequest2","hp":1}],"ver":"1.0"}}]}}`),
 	}
 
 	errL := deps.validateRequest(&req)
 
-	expectedError := errors.New("request.ext.prebid.schains contains multiple schains for bidder appnexus; it must contain no more than one per bidder.")
+	expectedError := fmt.Errorf("request.ext.prebid.schains contains multiple schains for bidder appnexus; it must contain no more than one per bidder.")
 	assert.ElementsMatch(t, errL, []error{expectedError})
 }
 
@@ -1689,12 +1519,12 @@ func TestGetAccountID(t *testing.T) {
 		{
 			description:   "Neither Publisher.ID or Publisher.Ext.Prebid.ParentAccount present",
 			pub:           &openrtb.Publisher{},
-			expectedAccID: metrics.PublisherUnknown,
+			expectedAccID: pbsmetrics.PublisherUnknown,
 		},
 		{
 			description:   "Publisher is nil",
 			pub:           nil,
-			expectedAccID: metrics.PublisherUnknown,
+			expectedAccID: pbsmetrics.PublisherUnknown,
 		},
 	}
 
@@ -1822,297 +1652,15 @@ func TestValidateAndFillSourceTID(t *testing.T) {
 	}
 }
 
-func TestEidPermissionsInvalid(t *testing.T) {
-	deps := &endpointDeps{
-		&nobidExchange{},
-		newParamsValidator(t),
-		&mockStoredReqFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{},
-		false,
-		[]byte{},
-		openrtb_ext.BuildBidderMap(),
-		nil,
-		nil,
-		hardcodedResponseIPValidator{response: true},
-	}
-
-	ui := uint64(1)
-	req := openrtb.BidRequest{
-		ID: "anyRequestID",
-		Imp: []openrtb.Imp{
-			{
-				ID: "anyImpID",
-				Banner: &openrtb.Banner{
-					W: &ui,
-					H: &ui,
-				},
-				Ext: json.RawMessage(`{"appnexus": {"placementId": 5667}}`),
-			},
-		},
-		Site: &openrtb.Site{
-			ID: "anySiteID",
-		},
-		Ext: json.RawMessage(`{"prebid": {"data": {"eidpermissions": [{"source":"a", "bidders":[]}]} } }`),
-	}
-
-	errL := deps.validateRequest(&req)
-
-	expectedError := errors.New(`request.ext.prebid.data.eidpermissions[0] missing or empty required field: "bidders"`)
-	assert.ElementsMatch(t, errL, []error{expectedError})
-}
-
-func TestValidateEidPermissions(t *testing.T) {
-	knownBidders := map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")}
-	knownAliases := map[string]string{"b": "b"}
-
-	testCases := []struct {
-		description   string
-		request       *openrtb_ext.ExtRequest
-		expectedError error
-	}{
-		{
-			description:   "Valid - Nil ext",
-			request:       nil,
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Empty ext",
-			request:       &openrtb_ext.ExtRequest{},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Nil ext.prebid.data",
-			request:       &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{}},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Empty ext.prebid.data",
-			request:       &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{}}},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Nil ext.prebid.data.eidpermissions",
-			request:       &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: nil}}},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - None",
-			request:       &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{}}}},
-			expectedError: nil,
-		},
-		{
-			description: "Valid - One",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-			}}}},
-			expectedError: nil,
-		},
-		{
-			description: "Valid - Many",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Source: "sourceB", Bidders: []string{"a"}},
-			}}}},
-			expectedError: nil,
-		},
-		{
-			description: "Invalid - Missing Source",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Bidders: []string{"a"}},
-			}}}},
-			expectedError: errors.New(`request.ext.prebid.data.eidpermissions[1] missing required field: "source"`),
-		},
-		{
-			description: "Invalid - Duplicate Source",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Source: "sourceA", Bidders: []string{"a"}},
-			}}}},
-			expectedError: errors.New(`request.ext.prebid.data.eidpermissions[1] duplicate entry with field: "source"`),
-		},
-		{
-			description: "Invalid - Missing Bidders - Nil",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Source: "sourceB"},
-			}}}},
-			expectedError: errors.New(`request.ext.prebid.data.eidpermissions[1] missing or empty required field: "bidders"`),
-		},
-		{
-			description: "Invalid - Missing Bidders - Empty",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Source: "sourceB", Bidders: []string{}},
-			}}}},
-			expectedError: errors.New(`request.ext.prebid.data.eidpermissions[1] missing or empty required field: "bidders"`),
-		},
-		{
-			description: "Invalid - Invalid Bidders",
-			request: &openrtb_ext.ExtRequest{Prebid: openrtb_ext.ExtRequestPrebid{Data: &openrtb_ext.ExtRequestPrebidData{EidPermissions: []openrtb_ext.ExtRequestPrebidDataEidPermission{
-				{Source: "sourceA", Bidders: []string{"a"}},
-				{Source: "sourceB", Bidders: []string{"z"}},
-			}}}},
-			expectedError: errors.New(`request.ext.prebid.data.eidpermissions[1] contains unrecognized bidder "z"`),
-		},
-	}
-
-	endpoint := &endpointDeps{bidderMap: knownBidders}
-	for _, test := range testCases {
-		result := endpoint.validateEidPermissions(test.request, knownAliases)
-		assert.Equal(t, test.expectedError, result, test.description)
-	}
-}
-
-func TestValidateBidders(t *testing.T) {
-	testCases := []struct {
-		description   string
-		bidders       []string
-		knownBidders  map[string]openrtb_ext.BidderName
-		knownAliases  map[string]string
-		expectedError error
-	}{
-		{
-			description:   "Valid - No Bidders",
-			bidders:       []string{},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - All Bidders",
-			bidders:       []string{"*"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - One Core Bidder",
-			bidders:       []string{"a"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Many Core Bidders",
-			bidders:       []string{"a", "b"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a"), "b": openrtb_ext.BidderName("b")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - One Alias Bidder",
-			bidders:       []string{"c"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Many Alias Bidders",
-			bidders:       []string{"c", "d"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c", "d": "d"},
-			expectedError: nil,
-		},
-		{
-			description:   "Valid - Mixed Core + Alias Bidders",
-			bidders:       []string{"a", "c"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: nil,
-		},
-		{
-			description:   "Invalid - Unknown Bidder",
-			bidders:       []string{"z"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`unrecognized bidder "z"`),
-		},
-		{
-			description:   "Invalid - Unknown Bidder Case Sensitive",
-			bidders:       []string{"A"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`unrecognized bidder "A"`),
-		},
-		{
-			description:   "Invalid - Unknown Bidder With Known Bidders",
-			bidders:       []string{"a", "c", "z"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`unrecognized bidder "z"`),
-		},
-		{
-			description:   "Invalid - All Bidders With Known Bidder",
-			bidders:       []string{"*", "a"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`bidder wildcard "*" mixed with specific bidders`),
-		},
-		{
-			description:   "Invalid - Returns First Error - All Bidders",
-			bidders:       []string{"*", "z"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`bidder wildcard "*" mixed with specific bidders`),
-		},
-		{
-			description:   "Invalid - Returns First Error - Unknown Bidder",
-			bidders:       []string{"z", "*"},
-			knownBidders:  map[string]openrtb_ext.BidderName{"a": openrtb_ext.BidderName("a")},
-			knownAliases:  map[string]string{"c": "c"},
-			expectedError: errors.New(`unrecognized bidder "z"`),
-		},
-	}
-
-	for _, test := range testCases {
-		result := validateBidders(test.bidders, test.knownBidders, test.knownAliases)
-		assert.Equal(t, test.expectedError, result, test.description)
-	}
-}
-
-func TestIOS14EndToEnd(t *testing.T) {
-	exchange := &nobidExchange{}
-
-	endpoint, _ := NewEndpoint(
-		exchange,
-		newParamsValidator(t),
-		&mockStoredReqFetcher{},
-		empty_fetcher.EmptyFetcher{},
-		&config.Configuration{MaxRequestSize: maxSize},
-		newTestMetrics(),
-		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
-		map[string]string{},
-		[]byte{},
-		openrtb_ext.BuildBidderMap())
-
-	httpReq := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(validRequest(t, "app-ios140-no-ifa.json")))
-
-	endpoint(httptest.NewRecorder(), httpReq, nil)
-
-	result := exchange.gotRequest
-	if !assert.NotEmpty(t, result, "request received by the exchange.") {
-		t.FailNow()
-	}
-
-	var lmtOne int8 = 1
-	assert.Equal(t, &lmtOne, result.Device.Lmt)
-}
-
 // nobidExchange is a well-behaved exchange which always bids "no bid".
 type nobidExchange struct {
 	gotRequest *openrtb.BidRequest
 }
 
-func (e *nobidExchange) HoldAuction(ctx context.Context, r exchange.AuctionRequest, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
-	e.gotRequest = r.BidRequest
+func (e *nobidExchange) HoldAuction(ctx context.Context, bidRequest *openrtb.BidRequest, ids exchange.IdFetcher, labels pbsmetrics.Labels, account *config.Account, categoriesFetcher *stored_requests.CategoryFetcher, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
+	e.gotRequest = bidRequest
 	return &openrtb.BidResponse{
-		ID:    r.BidRequest.ID,
+		ID:    bidRequest.ID,
 		BidID: "test bid id",
 		NBR:   openrtb.NoBidReasonCodeUnknownError.Ptr(),
 	}, nil
@@ -2124,40 +1672,25 @@ type mockBidExchange struct {
 
 // mockBidExchange is a well-behaved exchange that lists the bidders found in every bidRequest.Imp[i].Ext
 // into the bidResponse.Ext to assert the bidder adapters that were not filtered out in the validation process
-func (e *mockBidExchange) HoldAuction(ctx context.Context, r exchange.AuctionRequest, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
+func (e *mockBidExchange) HoldAuction(ctx context.Context, bidRequest *openrtb.BidRequest, ids exchange.IdFetcher, labels pbsmetrics.Labels, account *config.Account, categoriesFetcher *stored_requests.CategoryFetcher, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
 	bidResponse := &openrtb.BidResponse{
-		ID:    r.BidRequest.ID,
+		ID:    bidRequest.ID,
 		BidID: "test bid id",
 		NBR:   openrtb.NoBidReasonCodeUnknownError.Ptr(),
 	}
-	if len(r.BidRequest.Imp) > 0 {
+	if len(bidRequest.Imp) > 0 {
 		var SeatBidMap = make(map[string]openrtb.SeatBid, 0)
-		for _, imp := range r.BidRequest.Imp {
+		for _, imp := range bidRequest.Imp {
 			var bidderExts map[string]json.RawMessage
 			if err := json.Unmarshal(imp.Ext, &bidderExts); err != nil {
 				return nil, err
 			}
 
-			if rawPrebidExt, ok := bidderExts[openrtb_ext.PrebidExtKey]; ok {
-				var prebidExt openrtb_ext.ExtImpPrebid
-				if err := json.Unmarshal(rawPrebidExt, &prebidExt); err == nil && prebidExt.Bidder != nil {
-					for bidder, ext := range prebidExt.Bidder {
-						if ext == nil {
-							continue
-						}
-
-						bidderExts[bidder] = ext
-					}
-				}
-			}
-
 			for bidderNameOrAlias := range bidderExts {
-				if isBidderToValidate(bidderNameOrAlias) {
-					if val, ok := SeatBidMap[bidderNameOrAlias]; ok {
-						val.Bid = append(val.Bid, openrtb.Bid{ID: fmt.Sprintf("%s-bid", bidderNameOrAlias)})
-					} else {
-						SeatBidMap[bidderNameOrAlias] = openrtb.SeatBid{Seat: fmt.Sprintf("%s-bids", bidderNameOrAlias), Bid: []openrtb.Bid{{ID: fmt.Sprintf("%s-bid", bidderNameOrAlias)}}}
-					}
+				if val, ok := SeatBidMap[bidderNameOrAlias]; ok {
+					val.Bid = append(val.Bid, openrtb.Bid{ID: fmt.Sprintf("%s-bid", bidderNameOrAlias)})
+				} else {
+					SeatBidMap[bidderNameOrAlias] = openrtb.SeatBid{Seat: fmt.Sprintf("%s-bids", bidderNameOrAlias), Bid: []openrtb.Bid{{ID: fmt.Sprintf("%s-bid", bidderNameOrAlias)}}}
 				}
 			}
 		}
@@ -2171,7 +1704,7 @@ func (e *mockBidExchange) HoldAuction(ctx context.Context, r exchange.AuctionReq
 
 type brokenExchange struct{}
 
-func (e *brokenExchange) HoldAuction(ctx context.Context, r exchange.AuctionRequest, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
+func (e *brokenExchange) HoldAuction(ctx context.Context, bidRequest *openrtb.BidRequest, ids exchange.IdFetcher, labels pbsmetrics.Labels, account *config.Account, categoriesFetcher *stored_requests.CategoryFetcher, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
 	return nil, errors.New("Critical, unrecoverable error.")
 }
 
@@ -2537,8 +2070,8 @@ type mockExchange struct {
 	lastRequest *openrtb.BidRequest
 }
 
-func (m *mockExchange) HoldAuction(ctx context.Context, r exchange.AuctionRequest, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
-	m.lastRequest = r.BidRequest
+func (m *mockExchange) HoldAuction(ctx context.Context, bidRequest *openrtb.BidRequest, ids exchange.IdFetcher, labels pbsmetrics.Labels, account *config.Account, categoriesFetcher *stored_requests.CategoryFetcher, debugLog *exchange.DebugLog) (*openrtb.BidResponse, error) {
+	m.lastRequest = bidRequest
 	return &openrtb.BidResponse{
 		SeatBid: []openrtb.SeatBid{{
 			Bid: []openrtb.Bid{{
@@ -2548,8 +2081,8 @@ func (m *mockExchange) HoldAuction(ctx context.Context, r exchange.AuctionReques
 	}, nil
 }
 
-func getBidderInfos(cfg map[string]config.Adapter, biddersNames []openrtb_ext.BidderName) config.BidderInfos {
-	biddersInfos := make(config.BidderInfos)
+func getBidderInfos(cfg map[string]config.Adapter, biddersNames []openrtb_ext.BidderName) adapters.BidderInfos {
+	biddersInfos := make(adapters.BidderInfos)
 	for _, name := range biddersNames {
 		adapterConfig, ok := cfg[string(name)]
 		if !ok {
@@ -2560,9 +2093,14 @@ func getBidderInfos(cfg map[string]config.Adapter, biddersNames []openrtb_ext.Bi
 	return biddersInfos
 }
 
-func newBidderInfo(cfg config.Adapter) config.BidderInfo {
-	return config.BidderInfo{
-		Enabled: !cfg.Disabled,
+func newBidderInfo(cfg config.Adapter) adapters.BidderInfo {
+	status := adapters.StatusActive
+	if cfg.Disabled == true {
+		status = adapters.StatusDisabled
+	}
+
+	return adapters.BidderInfo{
+		Status: status,
 	}
 }
 

@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"text/template"
 
+	"github.com/golang/glog"
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/macros"
 	"github.com/prebid/prebid-server/openrtb_ext"
@@ -278,15 +278,12 @@ func newBadServerResponseError(message string) error {
 	}
 }
 
-// Builder builds a new instance of the AdkernelAdn adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	template, err := template.New("endpointTemplate").Parse(config.Endpoint)
+// NewAdkernelAdnAdapter to be called in prebid-server core to create AdkernelAdn adapter instance
+func NewAdkernelAdnAdapter(endpointTemplate string) adapters.Bidder {
+	template, err := template.New("endpointTemplate").Parse(endpointTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse endpoint url template: %v", err)
+		glog.Fatal("Unable to parse endpoint url template")
+		return nil
 	}
-
-	bidder := &adkernelAdnAdapter{
-		EndpointTemplate: *template,
-	}
-	return bidder, nil
+	return &adkernelAdnAdapter{EndpointTemplate: *template}
 }

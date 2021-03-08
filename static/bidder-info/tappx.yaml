@@ -5,7 +5,3 @@ capabilities:
     mediaTypes:
       - banner
       - video
-  site:
-    mediaTypes:
-      - banner
-      - video
