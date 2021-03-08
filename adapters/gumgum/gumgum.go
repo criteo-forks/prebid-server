@@ -3,15 +3,13 @@ package gumgum
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/mxmCherry/openrtb"
+	"github.com/prebid/prebid-server/adapters"
+	"github.com/prebid/prebid-server/errortypes"
+	"github.com/prebid/prebid-server/openrtb_ext"
 	"net/http"
 	"strconv"
 	"strings"
-
-	"github.com/mxmCherry/openrtb"
-	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
-	"github.com/prebid/prebid-server/errortypes"
-	"github.com/prebid/prebid-server/openrtb_ext"
 )
 
 // GumGumAdapter implements Bidder interface.
@@ -22,33 +20,34 @@ type GumGumAdapter struct {
 // MakeRequests makes the HTTP requests which should be made to fetch bids.
 func (g *GumGumAdapter) MakeRequests(request *openrtb.BidRequest, reqInfo *adapters.ExtraRequestInfo) ([]*adapters.RequestData, []error) {
 	var validImps []openrtb.Imp
-	var siteCopy openrtb.Site
-	if request.Site != nil {
-		siteCopy = *request.Site
-	}
+	var trackingId string
 
 	numRequests := len(request.Imp)
 	errs := make([]error, 0, numRequests)
 
 	for i := 0; i < numRequests; i++ {
 		imp := request.Imp[i]
-		gumgumExt, err := preprocess(&imp)
+		zone, err := preprocess(&imp)
 		if err != nil {
 			errs = append(errs, err)
-		} else {
-			if gumgumExt.Zone != "" {
-				siteCopy.ID = gumgumExt.Zone
+		} else if request.Imp[i].Banner != nil {
+			bannerCopy := *request.Imp[i].Banner
+			if bannerCopy.W == nil && bannerCopy.H == nil && len(bannerCopy.Format) > 0 {
+				format := bannerCopy.Format[0]
+				bannerCopy.W = &(format.W)
+				bannerCopy.H = &(format.H)
 			}
-
-			if gumgumExt.PubID != 0 {
-				if siteCopy.Publisher != nil {
-					siteCopy.Publisher.ID = strconv.FormatFloat(gumgumExt.PubID, 'f', -1, 64)
-				} else {
-					siteCopy.Publisher = &openrtb.Publisher{ID: strconv.FormatFloat(gumgumExt.PubID, 'f', -1, 64)}
-				}
+			request.Imp[i].Banner = &bannerCopy
+			validImps = append(validImps, request.Imp[i])
+			trackingId = zone
+		} else if request.Imp[i].Video != nil {
+			err := validateVideoParams(request.Imp[i].Video)
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				validImps = append(validImps, request.Imp[i])
+				trackingId = zone
 			}
-
-			validImps = append(validImps, imp)
 		}
 	}
 
@@ -59,6 +58,8 @@ func (g *GumGumAdapter) MakeRequests(request *openrtb.BidRequest, reqInfo *adapt
 	request.Imp = validImps
 
 	if request.Site != nil {
+		siteCopy := *request.Site
+		siteCopy.ID = trackingId
 		request.Site = &siteCopy
 	}
 
@@ -124,13 +125,13 @@ func (g *GumGumAdapter) MakeBids(internalRequest *openrtb.BidRequest, externalRe
 	return bidResponse, errs
 }
 
-func preprocess(imp *openrtb.Imp) (*openrtb_ext.ExtImpGumGum, error) {
+func preprocess(imp *openrtb.Imp) (string, error) {
 	var bidderExt adapters.ExtImpBidder
 	if err := json.Unmarshal(imp.Ext, &bidderExt); err != nil {
 		err = &errortypes.BadInput{
 			Message: err.Error(),
 		}
-		return nil, err
+		return "", err
 	}
 
 	var gumgumExt openrtb_ext.ExtImpGumGum
@@ -138,35 +139,11 @@ func preprocess(imp *openrtb.Imp) (*openrtb_ext.ExtImpGumGum, error) {
 		err = &errortypes.BadInput{
 			Message: err.Error(),
 		}
-		return nil, err
+		return "", err
 	}
 
-	if imp.Banner != nil && imp.Banner.W == nil && imp.Banner.H == nil && len(imp.Banner.Format) > 0 {
-		bannerCopy := *imp.Banner
-		format := bannerCopy.Format[0]
-		bannerCopy.W = &(format.W)
-		bannerCopy.H = &(format.H)
-		imp.Banner = &bannerCopy
-	}
-
-	if imp.Video != nil {
-		err := validateVideoParams(imp.Video)
-		if err != nil {
-			return nil, err
-		}
-
-		if gumgumExt.IrisID != "" {
-			videoCopy := *imp.Video
-			videoExt := openrtb_ext.ExtImpGumGumVideo{IrisID: gumgumExt.IrisID}
-			videoCopy.Ext, err = json.Marshal(&videoExt)
-			if err != nil {
-				return nil, err
-			}
-			imp.Video = &videoCopy
-		}
-	}
-
-	return &gumgumExt, nil
+	zone := gumgumExt.Zone
+	return zone, nil
 }
 
 func getMediaTypeForImpID(impID string, imps []openrtb.Imp) openrtb_ext.BidType {
@@ -187,10 +164,9 @@ func validateVideoParams(video *openrtb.Video) (err error) {
 	return nil
 }
 
-// Builder builds a new instance of the GumGum adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &GumGumAdapter{
-		URI: config.Endpoint,
+// NewGumGumBidder configures bidder endpoint.
+func NewGumGumBidder(endpoint string) *GumGumAdapter {
+	return &GumGumAdapter{
+		URI: endpoint,
 	}
-	return bidder, nil
 }

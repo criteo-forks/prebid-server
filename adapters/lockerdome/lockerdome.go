@@ -7,7 +7,6 @@ import (
 
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -149,10 +148,6 @@ func (adapter *LockerDomeAdapter) MakeBids(openRTBRequest *openrtb.BidRequest, r
 	return bidderResponse, nil
 }
 
-// Builder builds a new instance of the LockerDome adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &LockerDomeAdapter{
-		endpoint: config.Endpoint,
-	}
-	return bidder, nil
+func NewLockerDomeBidder(endpoint string) *LockerDomeAdapter {
+	return &LockerDomeAdapter{endpoint: endpoint}
 }

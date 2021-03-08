@@ -6,7 +6,7 @@
   "properties": {
     "pid": {
       "type": "string",
-      "description": "Placement id"
+      "description": "Placement idd"
     },
     "nq": {
       "type": "array",

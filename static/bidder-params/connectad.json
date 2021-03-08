@@ -16,7 +16,7 @@
       },
       "bidfloor": {
         "type": "number",
-        "description": "Requests Floorprice"
+        "description": "Requestes Floorprice"
       }
     },
     "required": ["networkId", "siteId"]

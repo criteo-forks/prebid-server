@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"text/template"
 
+	"github.com/golang/glog"
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/macros"
 	"github.com/prebid/prebid-server/openrtb_ext"
@@ -41,17 +41,13 @@ type bidExt struct {
 	CreativeType string `json:"format"`
 }
 
-// Builder builds a new instance of the SmartRTB adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	template, err := template.New("endpointTemplate").Parse(config.Endpoint)
+func NewSmartRTBBidder(endpointTemplate string) adapters.Bidder {
+	template, err := template.New("endpointTemplate").Parse(endpointTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse endpoint url template: %v", err)
+		glog.Fatal("Template URL error")
+		return nil
 	}
-
-	bidder := &SmartRTBAdapter{
-		EndpointTemplate: *template,
-	}
-	return bidder, nil
+	return &SmartRTBAdapter{EndpointTemplate: *template}
 }
 
 func (adapter *SmartRTBAdapter) buildEndpointURL(pubID string) (string, error) {
@@ -62,16 +58,12 @@ func (adapter *SmartRTBAdapter) buildEndpointURL(pubID string) (string, error) {
 func parseExtImp(dst *bidRequestExt, imp *openrtb.Imp) error {
 	var ext adapters.ExtImpBidder
 	if err := json.Unmarshal(imp.Ext, &ext); err != nil {
-		return &errortypes.BadInput{
-			Message: err.Error(),
-		}
+		return adapters.BadInput(err.Error())
 	}
 
 	var src openrtb_ext.ExtImpSmartRTB
 	if err := json.Unmarshal(ext.Bidder, &src); err != nil {
-		return &errortypes.BadInput{
-			Message: err.Error(),
-		}
+		return adapters.BadInput(err.Error())
 	}
 
 	if dst.PubID == "" {
@@ -111,7 +103,7 @@ func (s *SmartRTBAdapter) MakeRequests(brq *openrtb.BidRequest, reqInfo *adapter
 	}
 
 	if ext.PubID == "" {
-		return nil, append(errs, &errortypes.BadInput{Message: "Cannot infer publisher ID from bid ext"})
+		return nil, append(errs, adapters.BadInput("Cannot infer publisher ID from bid ext"))
 	}
 
 	brq.Ext, err = json.Marshal(ext)
@@ -150,7 +142,7 @@ func (s *SmartRTBAdapter) MakeBids(
 	if rs.StatusCode == http.StatusNoContent {
 		return nil, nil
 	} else if rs.StatusCode == http.StatusBadRequest {
-		return nil, []error{&errortypes.BadInput{Message: "Invalid request."}}
+		return nil, []error{adapters.BadInput("Invalid request.")}
 	} else if rs.StatusCode != http.StatusOK {
 		return nil, []error{&errortypes.BadServerResponse{
 			Message: fmt.Sprintf("Unexpected HTTP status %d.", rs.StatusCode),

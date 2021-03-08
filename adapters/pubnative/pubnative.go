@@ -9,7 +9,6 @@ import (
 
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -159,12 +158,8 @@ func (a *PubnativeAdapter) MakeBids(internalRequest *openrtb.BidRequest, externa
 	return bidResponse, nil
 }
 
-// Builder builds a new instance of the Pubnative adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &PubnativeAdapter{
-		URI: config.Endpoint,
-	}
-	return bidder, nil
+func NewPubnativeBidder(uri string) *PubnativeAdapter {
+	return &PubnativeAdapter{URI: uri}
 }
 
 func getMediaTypeForImp(impId string, imps []openrtb.Imp) openrtb_ext.BidType {

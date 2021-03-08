@@ -9,7 +9,6 @@ import (
 	"github.com/golang/glog"
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
@@ -181,10 +180,8 @@ func getMediaType(impId string, imps []openrtb.Imp) openrtb_ext.BidType {
 	return openrtb_ext.BidTypeBanner
 }
 
-// Builder builds a new instance of the Gamoshi adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	bidder := &GamoshiAdapter{
-		URI: config.Endpoint,
+func NewGamoshiBidder(endpoint string) *GamoshiAdapter {
+	return &GamoshiAdapter{
+		URI: endpoint,
 	}
-	return bidder, nil
 }

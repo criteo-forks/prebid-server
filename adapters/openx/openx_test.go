@@ -7,20 +7,11 @@ import (
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
 	"github.com/prebid/prebid-server/adapters/adapterstest"
-	"github.com/prebid/prebid-server/config"
-	"github.com/prebid/prebid-server/openrtb_ext"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestJsonSamples(t *testing.T) {
-	bidder, buildErr := Builder(openrtb_ext.BidderOpenx, config.Adapter{
-		Endpoint: "http://rtb.openx.net/prebid"})
-
-	if buildErr != nil {
-		t.Fatalf("Builder returned unexpected error %v", buildErr)
-	}
-
-	adapterstest.RunJSONBidderTest(t, "openxtest", bidder)
+	adapterstest.RunJSONBidderTest(t, "openxtest", NewOpenxBidder("http://rtb.openx.net/prebid"))
 }
 
 func TestResponseWithCurrencies(t *testing.T) {
@@ -34,13 +25,8 @@ func TestResponseWithCurrencies(t *testing.T) {
 }
 
 func assertCurrencyInBidResponse(t *testing.T, expectedCurrency string, currency *string) {
-	bidder, buildErr := Builder(openrtb_ext.BidderOpenx, config.Adapter{
-		Endpoint: "http://rtb.openx.net/prebid"})
 
-	if buildErr != nil {
-		t.Fatalf("Builder returned unexpected error %v", buildErr)
-	}
-
+	bidder := NewOpenxBidder("http://rtb.openx.net/prebid")
 	prebidRequest := &openrtb.BidRequest{
 		Imp: []openrtb.Imp{},
 	}

@@ -26,21 +26,7 @@ import (
 )
 
 func TestJsonSamples(t *testing.T) {
-	bidder, buildErr := Builder(openrtb_ext.BidderAdform, config.Adapter{
-		Endpoint: "https://adx.adform.net/adx"})
-
-	if buildErr != nil {
-		t.Fatalf("Builder returned unexpected error %v", buildErr)
-	}
-
-	adapterstest.RunJSONBidderTest(t, "adformtest", bidder)
-}
-
-func TestEndpointMalformed(t *testing.T) {
-	_, buildErr := Builder(openrtb_ext.BidderAdform, config.Adapter{
-		Endpoint: ` https://malformed`})
-
-	assert.Error(t, buildErr)
+	adapterstest.RunJSONBidderTest(t, "adformtest", NewAdformBidder(nil, "http://adx.adform.net/adx"))
 }
 
 type aTagInfo struct {
@@ -121,16 +107,6 @@ func createAdformServerResponse(testData aBidInfo) ([]byte, error) {
 			DealId:       testData.tags[2].dealId,
 			CreativeId:   testData.tags[2].creativeId,
 		},
-		{
-			ResponseType: "vast_content",
-			VastContent:  testData.tags[3].content,
-			Price:        testData.tags[3].price,
-			Currency:     "EUR",
-			Width:        testData.width,
-			Height:       testData.height,
-			DealId:       testData.tags[3].dealId,
-			CreativeId:   testData.tags[3].creativeId,
-		},
 	}
 	adformServerResponse, err := json.Marshal(bids)
 	return adformServerResponse, err
@@ -147,21 +123,10 @@ func TestAdformBasicResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Should not have gotten adapter error: %v", err)
 	}
-	if len(bids) != 3 {
-		t.Fatalf("Received %d bids instead of 3", len(bids))
+	if len(bids) != 2 {
+		t.Fatalf("Received %d bids instead of 2", len(bids))
 	}
-	expectedTypes := []openrtb_ext.BidType{
-		openrtb_ext.BidTypeBanner,
-		openrtb_ext.BidTypeBanner,
-		openrtb_ext.BidTypeVideo,
-	}
-
-	for i, bid := range bids {
-
-		if bid.CreativeMediaType != string(expectedTypes[i]) {
-			t.Errorf("Expected a %s bid. Got: %s", expectedTypes[i], bid.CreativeMediaType)
-		}
-
+	for _, bid := range bids {
 		matched := false
 		for _, tag := range adformTestData.tags {
 			if bid.AdUnitCode == tag.code {
@@ -207,7 +172,7 @@ func initTestData(server *httptest.Server, t *testing.T) (*AdformAdapter, contex
 
 	// prepare adapter
 	conf := *adapters.DefaultHTTPAdapterConfig
-	adapter := NewAdformLegacyAdapter(&conf, server.URL)
+	adapter := NewAdformAdapter(&conf, server.URL)
 
 	prebidRequest := preparePrebidRequest(server.URL, t)
 	ctx := context.TODO()
@@ -259,7 +224,7 @@ func preparePrebidRequest(serverUrl string, t *testing.T) *pbs.PBSRequest {
 
 func preparePrebidRequestBody(requestData aBidInfo, t *testing.T) *bytes.Buffer {
 	prebidRequest := pbs.PBSRequest{
-		AdUnits: make([]pbs.AdUnit, 4),
+		AdUnits: make([]pbs.AdUnit, 3),
 		Device: &openrtb.Device{
 			UA:  requestData.deviceUA,
 			IP:  requestData.deviceIP,
@@ -299,12 +264,7 @@ func preparePrebidRequestBody(requestData aBidInfo, t *testing.T) *bytes.Buffer 
 // OpenRTB auction tests
 
 func TestOpenRTBRequest(t *testing.T) {
-	bidder, buildErr := Builder(openrtb_ext.BidderAdform, config.Adapter{
-		Endpoint: "https://adx.adform.net"})
-
-	if buildErr != nil {
-		t.Fatalf("Builder returned unexpected error %v", buildErr)
-	}
+	bidder := NewAdformBidder(nil, "http://adx.adform.net")
 
 	testData := createTestData(true)
 	request := createOpenRtbRequest(&testData)
@@ -366,7 +326,6 @@ func createTestData(secure bool) aBidInfo {
 			{mid: 32344, keyValues: "color:red,age:30-40", keyWords: "red,blue", cdims: "300x300,400x200", priceType: "gross", code: "code1", price: 1.23, content: "banner-content1", dealId: "dealId1", creativeId: "creativeId1"},
 			{mid: 32345, priceType: "net", code: "code2", minp: 23.1, cdims: "300x200"}, // no bid for ad unit
 			{mid: 32346, code: "code3", price: 1.24, content: "banner-content2", dealId: "dealId2", url: "https://adform.com?a=b"},
-			{mid: 32347, code: "code4", content: "vast-xml"},
 		},
 		secure:   secure,
 		currency: "EUR",
@@ -420,11 +379,6 @@ func createOpenRtbRequest(testData *aBidInfo) *openrtb.BidRequest {
 func TestOpenRTBStandardResponse(t *testing.T) {
 	testData := createTestData(true)
 	request := createOpenRtbRequest(&testData)
-	expectedTypes := []openrtb_ext.BidType{
-		openrtb_ext.BidTypeBanner,
-		openrtb_ext.BidTypeBanner,
-		openrtb_ext.BidTypeVideo,
-	}
 
 	responseBody, err := createAdformServerResponse(testData)
 	if err != nil {
@@ -436,17 +390,16 @@ func TestOpenRTBStandardResponse(t *testing.T) {
 	bidder := new(AdformAdapter)
 	bidResponse, errs := bidder.MakeBids(request, nil, httpResponse)
 
-	if len(bidResponse.Bids) != 3 {
-		t.Fatalf("Expected 3 bids. Got %d", len(bidResponse.Bids))
+	if len(bidResponse.Bids) != 2 {
+		t.Fatalf("Expected 2 bids. Got %d", len(bidResponse.Bids))
 	}
 	if len(errs) != 0 {
 		t.Errorf("Expected 0 errors. Got %d", len(errs))
 	}
 
-	for i, typeBid := range bidResponse.Bids {
-
-		if typeBid.BidType != expectedTypes[i] {
-			t.Errorf("Expected a %s bid. Got: %s", expectedTypes[i], typeBid.BidType)
+	for _, typeBid := range bidResponse.Bids {
+		if typeBid.BidType != openrtb_ext.BidTypeBanner {
+			t.Errorf("Expected a banner bid. Got: %s", bidResponse.Bids[0].BidType)
 		}
 		bid := typeBid.Bid
 		matched := false
@@ -502,7 +455,7 @@ func TestOpenRTBSurpriseResponse(t *testing.T) {
 // Properties tests
 
 func TestAdformProperties(t *testing.T) {
-	adapter := NewAdformLegacyAdapter(adapters.DefaultHTTPAdapterConfig, "adx.adform.net/adx")
+	adapter := NewAdformAdapter(adapters.DefaultHTTPAdapterConfig, "adx.adform.net/adx")
 
 	if adapter.SkipNoCookies() != false {
 		t.Fatalf("should have been false")
@@ -525,6 +478,12 @@ func getRegs() openrtb.Regs {
 }
 
 func getUserExt() []byte {
+	digitrust := openrtb_ext.ExtUserDigiTrust{
+		ID:   "digitrustId",
+		KeyV: 1,
+		Pref: 0,
+	}
+
 	eids := []openrtb_ext.ExtUserEid{
 		{
 			Source: "test.com",
@@ -550,8 +509,9 @@ func getUserExt() []byte {
 	}
 
 	userExt := openrtb_ext.ExtUser{
-		Eids:    eids,
-		Consent: "abc",
+		Eids:      eids,
+		Consent:   "abc",
+		DigiTrust: &digitrust,
 	}
 	userExtData, err := json.Marshal(userExt)
 	if err == nil {
@@ -601,10 +561,10 @@ func assertAdformServerRequest(testData aBidInfo, r *http.Request, isOpenRtb boo
 	var midsWithCurrency = ""
 	var queryString = ""
 	if isOpenRtb {
-		midsWithCurrency = "bWlkPTMyMzQ0JnJjdXI9RVVSJm1rdj1jb2xvcjpyZWQsYWdlOjMwLTQwJm1rdz1yZWQsYmx1ZSZjZGltcz0zMDB4MzAwLDQwMHgyMDA&bWlkPTMyMzQ1JnJjdXI9RVVSJmNkaW1zPTMwMHgyMDAmbWlucD0yMy4xMA&bWlkPTMyMzQ2JnJjdXI9RVVS&bWlkPTMyMzQ3JnJjdXI9RVVS"
+		midsWithCurrency = "bWlkPTMyMzQ0JnJjdXI9RVVSJm1rdj1jb2xvcjpyZWQsYWdlOjMwLTQwJm1rdz1yZWQsYmx1ZSZjZGltcz0zMDB4MzAwLDQwMHgyMDA&bWlkPTMyMzQ1JnJjdXI9RVVSJmNkaW1zPTMwMHgyMDAmbWlucD0yMy4xMA&bWlkPTMyMzQ2JnJjdXI9RVVS"
 		queryString = "CC=1&adid=6D92078A-8246-4BA4-AE5B-76104861E7DC&eids=eyJ0ZXN0LmNvbSI6eyJvdGhlcl91c2VyX2lkIjpbMF0sInNvbWVfdXNlcl9pZCI6WzFdfSwidGVzdDIub3JnIjp7Im90aGVyX3VzZXJfaWQiOlsyXX19&fd=1&gdpr=1&gdpr_consent=abc&ip=111.111.111.111&pt=gross&rp=4&stid=transaction-id&url=https%3A%2F%2Fadform.com%3Fa%3Db&" + midsWithCurrency
 	} else {
-		midsWithCurrency = "bWlkPTMyMzQ0JnJjdXI9VVNEJm1rdj1jb2xvcjpyZWQsYWdlOjMwLTQwJm1rdz1yZWQsYmx1ZSZjZGltcz0zMDB4MzAwLDQwMHgyMDA&bWlkPTMyMzQ1JnJjdXI9VVNEJmNkaW1zPTMwMHgyMDAmbWlucD0yMy4xMA&bWlkPTMyMzQ2JnJjdXI9VVNE&bWlkPTMyMzQ3JnJjdXI9VVNE" // no way to pass currency in legacy adapter
+		midsWithCurrency = "bWlkPTMyMzQ0JnJjdXI9VVNEJm1rdj1jb2xvcjpyZWQsYWdlOjMwLTQwJm1rdz1yZWQsYmx1ZSZjZGltcz0zMDB4MzAwLDQwMHgyMDA&bWlkPTMyMzQ1JnJjdXI9VVNEJmNkaW1zPTMwMHgyMDAmbWlucD0yMy4xMA&bWlkPTMyMzQ2JnJjdXI9VVNE" // no way to pass currency in legacy adapter
 		queryString = "CC=1&adid=6D92078A-8246-4BA4-AE5B-76104861E7DC&fd=1&gdpr=1&gdpr_consent=abc&ip=111.111.111.111&pt=gross&rp=4&stid=transaction-id&" + midsWithCurrency
 	}
 
@@ -623,7 +583,7 @@ func assertAdformServerRequest(testData aBidInfo, r *http.Request, isOpenRtb boo
 	if ok, err := equal(testData.referrer, r.Header.Get("Referer"), "Referer"); !ok {
 		return err
 	}
-	if ok, err := equal(fmt.Sprintf("uid=%s;", testData.buyerUID), r.Header.Get("Cookie"), "Buyer ID"); !ok {
+	if ok, err := equal(fmt.Sprintf("uid=%s;DigiTrust.v1.identity=eyJpZCI6ImRpZ2l0cnVzdElkIiwidmVyc2lvbiI6MSwia2V5diI6MSwicHJpdmFjeSI6eyJvcHRvdXQiOmZhbHNlfX0", testData.buyerUID), r.Header.Get("Cookie"), "Buyer ID"); !ok {
 		return err
 	}
 	return nil
@@ -686,7 +646,7 @@ func TestPriceTypeUrlParameterCreation(t *testing.T) {
 // Asserts that toOpenRtbBidResponse() creates a *adapters.BidderResponse with
 // the currency of the last valid []*adformBid element and the expected number of bids
 func TestToOpenRtbBidResponse(t *testing.T) {
-	expectedBids := 4
+	expectedBids := 3
 	lastCurrency, anotherCurrency, emptyCurrency := "EUR", "USD", ""
 
 	request := &openrtb.BidRequest{
@@ -710,11 +670,6 @@ func TestToOpenRtbBidResponse(t *testing.T) {
 			{
 				ID:     "banner-imp-no4",
 				Ext:    json.RawMessage(`{"bidder1": { "mid": "32344" }}`),
-				Banner: &openrtb.Banner{},
-			},
-			{
-				ID:     "video-imp-no4",
-				Ext:    json.RawMessage(`{"bidder1": { "mid": "32345" }}`),
 				Banner: &openrtb.Banner{},
 			},
 		},
@@ -747,16 +702,6 @@ func TestToOpenRtbBidResponse(t *testing.T) {
 		{
 			ResponseType: "banner",
 			Banner:       "banner-content4",
-			Price:        1.25,
-			Currency:     emptyCurrency,
-			Width:        300,
-			Height:       200,
-			DealId:       "dealId4",
-			CreativeId:   "creativeId4",
-		},
-		{
-			ResponseType: "vast_content",
-			VastContent:  "vast-content",
 			Price:        1.25,
 			Currency:     lastCurrency,
 			Width:        300,

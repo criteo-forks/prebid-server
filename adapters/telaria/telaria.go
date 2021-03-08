@@ -3,14 +3,12 @@ package telaria
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"strconv"
-
 	"github.com/mxmCherry/openrtb"
 	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/openrtb_ext"
+	"net/http"
+	"strconv"
 )
 
 const Endpoint = "https://ads.tremorhub.com/ad/rtb/prebid"
@@ -27,6 +25,15 @@ type ImpressionExtOut struct {
 
 type telariaBidExt struct {
 	Extra json.RawMessage `json:"extra,omitempty"`
+}
+
+// used for cookies and such
+func (a *TelariaAdapter) Name() string {
+	return "telaria"
+}
+
+func (a *TelariaAdapter) SkipNoCookies() bool {
+	return false
 }
 
 // Endpoint for Telaria Ad server
@@ -291,15 +298,12 @@ func (a *TelariaAdapter) MakeBids(internalRequest *openrtb.BidRequest, externalR
 	return bidResponse, nil
 }
 
-// Builder builds a new instance of the Telaria adapter for the given bidder with the given config.
-func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
-	endpoint := config.Endpoint
+func NewTelariaBidder(endpoint string) *TelariaAdapter {
 	if endpoint == "" {
-		endpoint = Endpoint // Hardcoded default
+		endpoint = Endpoint
 	}
 
-	bidder := &TelariaAdapter{
+	return &TelariaAdapter{
 		URI: endpoint,
 	}
-	return bidder, nil
 }
