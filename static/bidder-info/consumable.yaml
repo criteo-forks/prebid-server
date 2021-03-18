@@ -1,0 +1,10 @@
+maintainer:
+  email: "naffis@consumable.com"
+gvlVendorID: 591
+capabilities:
+  app:
+    mediaTypes:
+    - banner
+  site:
+    mediaTypes:
+    - banner

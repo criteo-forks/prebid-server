@@ -27,3 +27,11 @@ func (fetcher EmptyFetcher) FetchRequests(ctx context.Context, requestIDs []stri
 	}
 	return
 }
+
+func (fetcher EmptyFetcher) FetchAccount(ctx context.Context, accountID string) (json.RawMessage, []error) {
+	return nil, []error{stored_requests.NotFoundError{accountID, "Account"}}
+}
+
+func (fetcher EmptyFetcher) FetchCategories(ctx context.Context, primaryAdServer, publisherId, iabCategory string) (string, error) {
+	return "", nil
+}

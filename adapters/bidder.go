@@ -2,9 +2,12 @@ package adapters
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 
 	"github.com/mxmCherry/openrtb"
+	"github.com/prebid/prebid-server/config"
+	"github.com/prebid/prebid-server/metrics"
 	"github.com/prebid/prebid-server/openrtb_ext"
 )
 
@@ -12,13 +15,18 @@ import (
 type Bidder interface {
 	// MakeRequests makes the HTTP requests which should be made to fetch bids.
 	//
+	// Bidder implementations can assume that the incoming BidRequest has:
+	//
+	//   1. Only {Imp.Type, Platform} combinations which are valid, as defined by the static/bidder-info.{bidder}.yaml file.
+	//   2. Imp.Ext of the form {"bidder": params}, where "params" has been validated against the static/bidder-params/{bidder}.json JSON Schema.
+	//
 	// nil return values are acceptable, but nil elements *inside* those slices are not.
 	//
 	// The errors should contain a list of errors which explain why this bidder's bids will be
 	// "subpar" in some way. For example: the request contained ad types which this bidder doesn't support.
 	//
-	// If the error is caused by bad user input, return a BadInputError.
-	MakeRequests(request *openrtb.BidRequest) ([]*RequestData, []error)
+	// If the error is caused by bad user input, return an errortypes.BadInput.
+	MakeRequests(request *openrtb.BidRequest, reqInfo *ExtraRequestInfo) ([]*RequestData, []error)
 
 	// MakeBids unpacks the server's response into Bids.
 	//
@@ -27,45 +35,29 @@ type Bidder interface {
 	// The errors should contain a list of errors which explain why this bidder's bids will be
 	// "subpar" in some way. For example: the server response didn't have the expected format.
 	//
-	// If the error was caused by bad user input, return a BadInputError.
-	// If the error was caused by a bad server response, return a BadServerResponseError
+	// If the error was caused by bad user input, return a errortypes.BadInput.
+	// If the error was caused by a bad server response, return a errortypes.BadServerResponse
 	MakeBids(internalRequest *openrtb.BidRequest, externalRequest *RequestData, response *ResponseData) (*BidderResponse, []error)
 }
 
-// BadInputError should be used when returning errors which are caused by bad input.
-// It should _not_ be used if the error is a server-side issue (e.g. failed to send the external request).
-//
-// BadInputErrors will not be written to the app log, since it's not an actionable item for the Prebid Server hosts.
-type BadInputError struct {
-	Message string
-}
+// TimeoutBidder is used to identify bidders that support timeout notifications.
+type TimeoutBidder interface {
+	Bidder
 
-func (err *BadInputError) Error() string {
-	return err.Message
-}
-
-// BadServerResponseError should be used when returning errors which are caused by bad/unexpected behavior on the remote server.
-//
-// For example:
-//
-//   - The external server responded with a 500
-//   - The external server gave a malformed or unexpected response.
-//
-// These should not be used to log _connection_ errors (e.g. "couldn't find host"),
-// which may indicate config issues for the PBS host company
-type BadServerResponseError struct {
-	Message string
-}
-
-func (err *BadServerResponseError) Error() string {
-	return err.Message
+	// MakeTimeoutNotice functions much the same as MakeRequests, except it is fed the bidder request that timed out,
+	// and expects that only one notification "request" will be generated. A use case for multiple timeout notifications
+	// has not been anticipated.
+	//
+	// Do note that if MakeRequests returns multiple requests, and more than one of these times out, MakeTimeoutNotice will be called
+	// once for each timed out request.
+	MakeTimeoutNotification(req *RequestData) (*RequestData, []error)
 }
 
 // BidderResponse wraps the server's response with the list of bids and the currency used by the bidder.
 //
 // Currency declaration is not mandatory but helps to detect an eventual currency mismatch issue.
 // From the bid response, the bidder accepts a list of valid currencies for the bid.
-// The currency is the same accross all bids.
+// The currency is the same across all bids.
 type BidderResponse struct {
 	Currency string
 	Bids     []*TypedBid
@@ -97,9 +89,13 @@ func NewBidderResponse() *BidderResponse {
 //
 // TypedBid.Bid.Ext will become "response.seatbid[i].bid.ext.bidder" in the final OpenRTB response.
 // TypedBid.BidType will become "response.seatbid[i].bid.ext.prebid.type" in the final OpenRTB response.
+// TypedBid.BidVideo will become "response.seatbid[i].bid.ext.prebid.video" in the final OpenRTB response.
+// TypedBid.DealPriority is optionally provided by adapters and used internally by the exchange to support deal targeted campaigns.
 type TypedBid struct {
-	Bid     *openrtb.Bid
-	BidType openrtb_ext.BidType
+	Bid          *openrtb.Bid
+	BidType      openrtb_ext.BidType
+	BidVideo     *openrtb_ext.ExtBidPrebidVideo
+	DealPriority int
 }
 
 // RequestData and ResponseData exist so that prebid-server core code can implement its "debug" functionality
@@ -132,9 +128,15 @@ type ExtImpBidder struct {
 	//
 	// Bidder implementations may safely assume that this JSON has been validated by their
 	// static/bidder-params/{bidder}.json file.
-	Bidder openrtb.RawJSON `json:"bidder"`
+	Bidder json.RawMessage `json:"bidder"`
 }
 
 func (r *RequestData) SetBasicAuth(username string, password string) {
 	r.Headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
 }
+
+type ExtraRequestInfo struct {
+	PbsEntryPoint metrics.RequestType
+}
+
+type Builder func(openrtb_ext.BidderName, config.Adapter) (Bidder, error)

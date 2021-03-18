@@ -1,0 +1,12 @@
+maintainer:
+  email: "apex.prebid@sonobi.com"
+gvlVendorID: 104
+capabilities:
+  site:
+    mediaTypes:
+      - banner
+      - video
+  app:
+    mediaTypes:
+      - banner
+      - video

@@ -1,0 +1,7 @@
+maintainer:
+  email: "prebid@rtbhouse.com"
+gvlVendorID: 16
+capabilities:
+  site:
+    mediaTypes:
+      - banner

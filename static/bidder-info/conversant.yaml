@@ -1,9 +1,11 @@
 maintainer:
-  email: "mediapsr@conversantmedia.com"
+  email: "CNVR_PublisherIntegration@conversantmedia.com"
+gvlVendorID: 24
 capabilities:
   app:
     mediaTypes:
       - banner
+      - video
   site:
     mediaTypes:
       - banner

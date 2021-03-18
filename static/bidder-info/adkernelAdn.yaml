@@ -1,0 +1,11 @@
+maintainer:
+  email: "prebid-dev@adkernel.com"
+gvlVendorID: 14
+capabilities:
+  app:
+    mediaTypes:
+      - banner
+  site:
+    mediaTypes:
+      - banner
+      - video

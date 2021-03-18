@@ -5,99 +5,174 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMultiFetcher(t *testing.T) {
-	mf0 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"abc": json.RawMessage(`{}`),
-		},
-		mockGetImps: map[string]json.RawMessage{
-			"imp-0": json.RawMessage(`{}`),
-		},
-		returnErrs: []error{NotFoundError{"def", "Request"}, NotFoundError{"imp-1", "Imp"}},
-	}
-	mf1 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"def": json.RawMessage(`{}`),
-		},
-		mockGetImps: map[string]json.RawMessage{
-			"imp-1": json.RawMessage(`{}`),
-		},
-		returnErrs: []error{NotFoundError{"abc", "Request"}, NotFoundError{"imp-0", "Imp"}},
-	}
-	mf := &MultiFetcher{mf0, mf1}
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
+	reqIDs := []string{"abc", "def"}
+	impIDs := []string{"imp-1", "imp-2"}
 
-	// Verify we can use multifetcher as a fetcher
-	var fetcher Fetcher = mf
+	f1.On("FetchRequests", ctx, reqIDs, impIDs).Return(
+		map[string]json.RawMessage{
+			"abc": json.RawMessage(`{"req_id": "abc"}`),
+		},
+		map[string]json.RawMessage{
+			"imp-1": json.RawMessage(`{"imp_id": "imp-1"}`),
+		},
+		[]error{NotFoundError{"def", "Request"}, NotFoundError{"imp-2", "Imp"}},
+	)
+	f2.On("FetchRequests", ctx, []string{"def"}, []string{"imp-2"}).Return(
+		map[string]json.RawMessage{
+			"def": json.RawMessage(`{"req_id": "def"}`),
+		},
+		map[string]json.RawMessage{
+			"imp-2": json.RawMessage(`{"imp_id": "imp-2"}`),
+		},
+		[]error{},
+	)
 
-	requestData, impData, errs := fetcher.FetchRequests(context.Background(), []string{"abc", "def"}, []string{"imp-0", "imp-1"})
+	reqData, impData, errs := fetcher.FetchRequests(ctx, reqIDs, impIDs)
 
-	assertResults(t, "results", 2, len(requestData))
-	assertResults(t, "results", 2, len(impData))
-	assertResults(t, "errors", 0, len(errs))
+	f1.AssertExpectations(t)
+	f2.AssertExpectations(t)
+	assert.Len(t, reqData, 2, "MultiFetcher should return all the requested stored req data that exists")
+	assert.Len(t, impData, 2, "MultiFetcher should return all the requested stored imp data that exists")
+	assert.Len(t, errs, 0, "MultiFetcher shouldn't return an error")
+	assert.JSONEq(t, `{"req_id": "abc"}`, string(reqData["abc"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"req_id": "def"}`, string(reqData["def"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"imp_id": "imp-1"}`, string(impData["imp-1"]), "MultiFetcher should return the right imp data")
+	assert.JSONEq(t, `{"imp_id": "imp-2"}`, string(impData["imp-2"]), "MultiFetcher should return the right imp data")
 }
 
 func TestMissingID(t *testing.T) {
-	mf0 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"abc": json.RawMessage(`{}`),
-		},
-		mockGetImps: map[string]json.RawMessage{
-			"123": json.RawMessage(`{}`),
-		},
-		returnErrs: []error{NotFoundError{"def", "Request"}, NotFoundError{"ghi", "Request"}, NotFoundError{"456", "Imp"}, NotFoundError{"789", "Imp"}},
-	}
-	mf1 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"def": json.RawMessage(`{}`),
-		},
-		mockGetImps: map[string]json.RawMessage{
-			"456": json.RawMessage(`{}`),
-		},
-		returnErrs: []error{NotFoundError{"abc", "Request"}, NotFoundError{"ghi", "Request"}, NotFoundError{"123", "Imp"}, NotFoundError{"789", "Imp"}},
-	}
-	mf := &MultiFetcher{mf0, mf1}
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
 	reqIDs := []string{"abc", "def", "ghi"}
-	impIDs := []string{"123", "456", "789"}
+	impIDs := []string{"imp-1", "imp-2", "imp-3"}
 
-	requestData, impData, errs := mf.FetchRequests(context.Background(), reqIDs, impIDs)
+	f1.On("FetchRequests", ctx, reqIDs, impIDs).Return(
+		map[string]json.RawMessage{
+			"abc": json.RawMessage(`{"req_id": "abc"}`),
+		},
+		map[string]json.RawMessage{
+			"imp-1": json.RawMessage(`{"imp_id": "imp-1"}`),
+		},
+		[]error{NotFoundError{"def", "Request"}, NotFoundError{"imp-2", "Imp"}},
+	)
+	f2.On("FetchRequests", ctx, []string{"def", "ghi"}, []string{"imp-2", "imp-3"}).Return(
+		map[string]json.RawMessage{
+			"def": json.RawMessage(`{"req_id": "def"}`),
+		},
+		map[string]json.RawMessage{
+			"imp-2": json.RawMessage(`{"imp_id": "imp-2"}`),
+		},
+		[]error{},
+	)
 
-	assertResults(t, "requests", 2, len(requestData))
-	assertResults(t, "imps", 2, len(impData))
-	assertResults(t, "errors", 2, len(errs))
+	reqData, impData, errs := fetcher.FetchRequests(ctx, reqIDs, impIDs)
+
+	f1.AssertExpectations(t)
+	f2.AssertExpectations(t)
+	assert.Len(t, reqData, 2, "MultiFetcher should return all the requested stored req data that exists")
+	assert.Len(t, impData, 2, "MultiFetcher should return all the requested stored imp data that exists")
+	assert.Len(t, errs, 2, "MultiFetcher should return an error if there are missing IDs")
+	assert.JSONEq(t, `{"req_id": "abc"}`, string(reqData["abc"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"req_id": "def"}`, string(reqData["def"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"imp_id": "imp-1"}`, string(impData["imp-1"]), "MultiFetcher should return the right imp data")
+	assert.JSONEq(t, `{"imp_id": "imp-2"}`, string(impData["imp-2"]), "MultiFetcher should return the right imp data")
 }
 
 func TestOtherError(t *testing.T) {
-	mf0 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"abc": json.RawMessage(`{}`),
-		},
-		returnErrs: []error{NotFoundError{"def", "Request"}, NotFoundError{"123", "Imp"}, errors.New("Other error")},
-	}
-	mf1 := &mockFetcher{
-		mockGetReqs: map[string]json.RawMessage{
-			"def": json.RawMessage(`{}`),
-		},
-		mockGetImps: map[string]json.RawMessage{
-			"123": json.RawMessage(`{}`),
-		},
-	}
-	mf := &MultiFetcher{mf0, mf1}
-	ids := []string{"abc", "def"}
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
+	reqIDs := []string{"abc", "def"}
+	impIDs := []string{"imp-1"}
 
-	// Verify we can use multifetcher as a fetcher
-	var fetcher Fetcher = mf
+	f1.On("FetchRequests", ctx, reqIDs, impIDs).Return(
+		map[string]json.RawMessage{
+			"abc": json.RawMessage(`{"req_id": "abc"}`),
+		},
+		map[string]json.RawMessage{},
+		[]error{NotFoundError{"def", "Request"}, errors.New("Other error")},
+	)
+	f2.On("FetchRequests", ctx, []string{"def"}, []string{"imp-1"}).Return(
+		map[string]json.RawMessage{
+			"def": json.RawMessage(`{"req_id": "def"}`),
+		},
+		map[string]json.RawMessage{
+			"imp-1": json.RawMessage(`{"imp_id": "imp-1"}`),
+		},
+		[]error{},
+	)
 
-	requestData, impData, errs := fetcher.FetchRequests(context.Background(), ids, []string{"123"})
+	reqData, impData, errs := fetcher.FetchRequests(ctx, reqIDs, impIDs)
 
-	assertResults(t, "results", 2, len(requestData))
-	assertResults(t, "results", 1, len(impData))
-	assertResults(t, "errors", 1, len(errs))
+	f1.AssertExpectations(t)
+	f2.AssertExpectations(t)
+	assert.Len(t, reqData, 2, "MultiFetcher should return all the requested stored req data that exists")
+	assert.Len(t, impData, 1, "MultiFetcher should return all the requested stored imp data that exists")
+	assert.Len(t, errs, 1, "MultiFetcher should return an error if one of the fetcher returns an error other than NotFoundError")
+	assert.JSONEq(t, `{"req_id": "abc"}`, string(reqData["abc"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"req_id": "def"}`, string(reqData["def"]), "MultiFetcher should return the right request data")
+	assert.JSONEq(t, `{"imp_id": "imp-1"}`, string(impData["imp-1"]), "MultiFetcher should return the right imp data")
 }
 
-func assertResults(t *testing.T, obj string, expect int, found int) {
-	if expect != found {
-		t.Errorf("Expected %d %s, found %d", expect, obj, found)
-	}
+func TestMultiFetcherAccountFoundInFirstFetcher(t *testing.T) {
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
+
+	f1.On("FetchAccount", ctx, "ONE").Once().Return(json.RawMessage(`{"id": "ONE"}`), []error{})
+
+	account, errs := fetcher.FetchAccount(ctx, "ONE")
+
+	f1.AssertExpectations(t)
+	f2.AssertNotCalled(t, "FetchAccount")
+	assert.Empty(t, errs)
+	assert.JSONEq(t, `{"id": "ONE"}`, string(account))
+}
+
+func TestMultiFetcherAccountFoundInSecondFetcher(t *testing.T) {
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
+
+	f1.On("FetchAccount", ctx, "TWO").Once().Return(json.RawMessage(``), []error{NotFoundError{"TWO", "Account"}})
+	f2.On("FetchAccount", ctx, "TWO").Once().Return(json.RawMessage(`{"id": "TWO"}`), []error{})
+
+	account, errs := fetcher.FetchAccount(ctx, "TWO")
+
+	f1.AssertExpectations(t)
+	f2.AssertExpectations(t)
+	assert.Empty(t, errs)
+	assert.JSONEq(t, `{"id": "TWO"}`, string(account))
+}
+
+func TestMultiFetcherAccountNotFound(t *testing.T) {
+	f1 := &mockFetcher{}
+	f2 := &mockFetcher{}
+	fetcher := &MultiFetcher{f1, f2}
+	ctx := context.Background()
+
+	f1.On("FetchAccount", ctx, "MISSING").Once().Return(json.RawMessage(``), []error{NotFoundError{"TWO", "Account"}})
+	f2.On("FetchAccount", ctx, "MISSING").Once().Return(json.RawMessage(``), []error{NotFoundError{"TWO", "Account"}})
+
+	account, errs := fetcher.FetchAccount(ctx, "MISSING")
+
+	f1.AssertExpectations(t)
+	f2.AssertExpectations(t)
+	assert.Len(t, errs, 1)
+	assert.Nil(t, account)
+	assert.EqualError(t, errs[0], NotFoundError{"MISSING", "Account"}.Error())
 }

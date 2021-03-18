@@ -5,6 +5,14 @@ import (
 	"errors"
 )
 
+// FirstPartyDataContextExtKey defines the field name within request.ext reserved for first party data.
+const FirstPartyDataContextExtKey = "context"
+
+// SKAdNExtKey defines the field name within request.ext reserved for Apple's SKAdNetwork.
+const SKAdNExtKey = "skadn"
+
+const MaxDecimalFigures int = 15
+
 // ExtRequest defines the contract for bidrequest.ext
 type ExtRequest struct {
 	Prebid ExtRequestPrebid `json:"prebid"`
@@ -12,16 +20,57 @@ type ExtRequest struct {
 
 // ExtRequestPrebid defines the contract for bidrequest.ext.prebid
 type ExtRequestPrebid struct {
-	Aliases              map[string]string      `json:"aliases,omitempty"`
-	BidAdjustmentFactors map[string]float64     `json:"bidadjustmentfactors,omitempty"`
-	Cache                *ExtRequestPrebidCache `json:"cache,omitempty"`
-	StoredRequest        *ExtStoredRequest      `json:"storedrequest,omitempty"`
-	Targeting            *ExtRequestTargeting   `json:"targeting,omitempty"`
+	Aliases              map[string]string         `json:"aliases,omitempty"`
+	BidAdjustmentFactors map[string]float64        `json:"bidadjustmentfactors,omitempty"`
+	Cache                *ExtRequestPrebidCache    `json:"cache,omitempty"`
+	Data                 *ExtRequestPrebidData     `json:"data,omitempty"`
+	Debug                bool                      `json:"debug,omitempty"`
+	Events               json.RawMessage           `json:"events,omitempty"`
+	SChains              []*ExtRequestPrebidSChain `json:"schains,omitempty"`
+	StoredRequest        *ExtStoredRequest         `json:"storedrequest,omitempty"`
+	SupportDeals         bool                      `json:"supportdeals,omitempty"`
+	Targeting            *ExtRequestTargeting      `json:"targeting,omitempty"`
+
+	// NoSale specifies bidders with whom the publisher has a legal relationship where the
+	// passing of personally identifiable information doesn't constitute a sale per CCPA law.
+	// The array may contain a single sstar ('*') entry to represent all bidders.
+	NoSale []string `json:"nosale,omitempty"`
+}
+
+// ExtRequestPrebid defines the contract for bidrequest.ext.prebid.schains
+type ExtRequestPrebidSChain struct {
+	Bidders []string                     `json:"bidders,omitempty"`
+	SChain  ExtRequestPrebidSChainSChain `json:"schain"`
+}
+
+// ExtRequestPrebidSChainSChain defines the contract for bidrequest.ext.prebid.schains[i].schain
+type ExtRequestPrebidSChainSChain struct {
+	Complete int                                 `json:"complete"`
+	Nodes    []*ExtRequestPrebidSChainSChainNode `json:"nodes"`
+	Ver      string                              `json:"ver"`
+	Ext      json.RawMessage                     `json:"ext,omitempty"`
+}
+
+// ExtRequestPrebidSChainSChainNode defines the contract for bidrequest.ext.prebid.schains[i].schain[i].nodes
+type ExtRequestPrebidSChainSChainNode struct {
+	ASI    string          `json:"asi"`
+	SID    string          `json:"sid"`
+	RID    string          `json:"rid,omitempty"`
+	Name   string          `json:"name,omitempty"`
+	Domain string          `json:"domain,omitempty"`
+	HP     int             `json:"hp"`
+	Ext    json.RawMessage `json:"ext,omitempty"`
+}
+
+// SourceExt defines the contract for bidrequest.source.ext
+type SourceExt struct {
+	SChain ExtRequestPrebidSChainSChain `json:"schain"`
 }
 
 // ExtRequestPrebidCache defines the contract for bidrequest.ext.prebid.cache
 type ExtRequestPrebidCache struct {
-	Bids *ExtRequestPrebidCacheBids `json:"bids"`
+	Bids    *ExtRequestPrebidCacheBids `json:"bids"`
+	VastXML *ExtRequestPrebidCacheVAST `json:"vastxml"`
 }
 
 // UnmarshalJSON prevents nil bids arguments.
@@ -32,8 +81,8 @@ func (ert *ExtRequestPrebidCache) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	if proxy.Bids == nil {
-		return errors.New(`request.ext.prebid.cache missing required property "bids"`)
+	if proxy.Bids == nil && proxy.VastXML == nil {
+		return errors.New(`request.ext.prebid.cache requires one of the "bids" or "vastxml" properties`)
 	}
 
 	*ert = ExtRequestPrebidCache(proxy)
@@ -41,13 +90,32 @@ func (ert *ExtRequestPrebidCache) UnmarshalJSON(b []byte) error {
 }
 
 // ExtRequestPrebidCacheBids defines the contract for bidrequest.ext.prebid.cache.bids
-type ExtRequestPrebidCacheBids struct{}
+type ExtRequestPrebidCacheBids struct {
+	ReturnCreative *bool `json:"returnCreative"`
+}
+
+// ExtRequestPrebidCacheVAST defines the contract for bidrequest.ext.prebid.cache.vastxml
+type ExtRequestPrebidCacheVAST struct {
+	ReturnCreative *bool `json:"returnCreative"`
+}
 
 // ExtRequestTargeting defines the contract for bidrequest.ext.prebid.targeting
 type ExtRequestTargeting struct {
-	PriceGranularity  PriceGranularity `json:"pricegranularity"`
-	IncludeWinners    bool             `json:"includewinners"`
-	IncludeBidderKeys bool             `json:"includebidderkeys"`
+	PriceGranularity     PriceGranularity         `json:"pricegranularity"`
+	IncludeWinners       bool                     `json:"includewinners"`
+	IncludeBidderKeys    bool                     `json:"includebidderkeys"`
+	IncludeBrandCategory *ExtIncludeBrandCategory `json:"includebrandcategory"`
+	IncludeFormat        bool                     `json:"includeformat"`
+	DurationRangeSec     []int                    `json:"durationrangesec"`
+	PreferDeals          bool                     `json:"preferdeals"`
+	AppendBidderNames    bool                     `json:"appendbiddernames,omitempty"`
+}
+
+type ExtIncludeBrandCategory struct {
+	PrimaryAdServer     int    `json:"primaryadserver"`
+	Publisher           string `json:"publisher"`
+	WithCategory        bool   `json:"withcategory"`
+	TranslateCategories *bool  `json:"translatecategories,omitempty"`
 }
 
 // Make an unmarshaller that will set a default PriceGranularity
@@ -56,7 +124,7 @@ func (ert *ExtRequestTargeting) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	// define seperate type to prevent infinite recursive calls to UnmarshalJSON
+	// define separate type to prevent infinite recursive calls to UnmarshalJSON
 	type extRequestTargetingDefaults ExtRequestTargeting
 	defaults := &extRequestTargetingDefaults{
 		PriceGranularity:  priceGranularityMed,
@@ -118,6 +186,9 @@ func (pg *PriceGranularity) UnmarshalJSON(b []byte) error {
 	if pgraw.Precision < 0 {
 		return errors.New("Price granularity error: precision must be non-negative")
 	}
+	if pgraw.Precision > MaxDecimalFigures {
+		return errors.New("Price granularity error: precision of more than 15 significant figures is not supported")
+	}
 	if len(pgraw.Ranges) > 0 {
 		var prevMax float64 = 0
 		for i, gr := range pgraw.Ranges {
@@ -129,15 +200,13 @@ func (pg *PriceGranularity) UnmarshalJSON(b []byte) error {
 			}
 			// Enforce that we don't read "min" from the request
 			pgraw.Ranges[i].Min = prevMax
-			if pgraw.Ranges[i].Min < prevMax {
-				return errors.New("Price granularity error: overlapping granularity ranges")
-			}
 			prevMax = gr.Max
 		}
-	} else {
-		return errors.New("Price granularity error: empty granularity definition supplied")
+		*pg = PriceGranularity(pgraw)
+		return nil
 	}
-	*pg = PriceGranularity(pgraw)
+	// Default to medium if no ranges are specified
+	*pg = priceGranularityMed
 	return nil
 }
 
@@ -145,7 +214,7 @@ func (pg *PriceGranularity) UnmarshalJSON(b []byte) error {
 func PriceGranularityFromString(gran string) PriceGranularity {
 	switch gran {
 	case "low":
-		return priceGranulrityLow
+		return priceGranularityLow
 	case "med", "medium":
 		// Seems that PBS was written with medium = "med", so hacking that in
 		return priceGranularityMed
@@ -160,7 +229,7 @@ func PriceGranularityFromString(gran string) PriceGranularity {
 	return PriceGranularity{}
 }
 
-var priceGranulrityLow = PriceGranularity{
+var priceGranularityLow = PriceGranularity{
 	Precision: 2,
 	Ranges: []GranularityRange{{
 		Min:       0,
@@ -224,4 +293,15 @@ var priceGranularityAuto = PriceGranularity{
 			Increment: 0.5,
 		},
 	},
+}
+
+// ExtRequestPrebidData defines Prebid's First Party Data (FPD) and related bid request options.
+type ExtRequestPrebidData struct {
+	EidPermissions []ExtRequestPrebidDataEidPermission `json:"eidpermissions"`
+}
+
+// ExtRequestPrebidDataEidPermission defines a filter rule for filter user.ext.eids
+type ExtRequestPrebidDataEidPermission struct {
+	Source  string   `json:"source"`
+	Bidders []string `json:"bidders"`
 }

@@ -1,25 +1,34 @@
 package adform
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+
+	"github.com/prebid/prebid-server/adapters"
+	"github.com/prebid/prebid-server/config"
+	"github.com/prebid/prebid-server/errortypes"
+	"github.com/prebid/prebid-server/openrtb_ext"
+	"github.com/prebid/prebid-server/pbs"
 
 	"github.com/buger/jsonparser"
 	"github.com/mxmCherry/openrtb"
-	"github.com/prebid/prebid-server/adapters"
-	"github.com/prebid/prebid-server/openrtb_ext"
-	"github.com/prebid/prebid-server/pbs"
 	"golang.org/x/net/context/ctxhttp"
 )
 
+const version = "0.1.3"
+
 type AdformAdapter struct {
 	http    *adapters.HTTPAdapter
-	URI     string
+	URL     *url.URL
 	version string
 }
 
@@ -33,11 +42,21 @@ type adformRequest struct {
 	referer       string
 	userId        string
 	adUnits       []*adformAdUnit
+	gdprApplies   string
+	consent       string
+	currency      string
+	eids          string
+	url           string
 }
 
 type adformAdUnit struct {
 	MasterTagId json.Number `json:"mid"`
 	PriceType   string      `json:"priceType,omitempty"`
+	KeyValues   string      `json:"mkv,omitempty"`
+	KeyWords    string      `json:"mkw,omitempty"`
+	CDims       string      `json:"cdims,omitempty"`
+	MinPrice    float64     `json:"minp,omitempty"`
+	Url         string      `json:"url,omitempty"`
 
 	bidId      string
 	adUnitCode string
@@ -52,10 +71,12 @@ type adformBid struct {
 	Height       uint64  `json:"height,omitempty"`
 	DealId       string  `json:"deal_id,omitempty"`
 	CreativeId   string  `json:"win_crid,omitempty"`
+	VastContent  string  `json:"vast_content,omitempty"`
 }
 
 const priceTypeGross = "gross"
 const priceTypeNet = "net"
+const defaultCurrency = "USD"
 
 func isPriceTypeValid(priceType string) (string, bool) {
 	pt := strings.ToLower(priceType)
@@ -66,8 +87,18 @@ func isPriceTypeValid(priceType string) (string, bool) {
 
 // ADAPTER Interface
 
-func NewAdformAdapter(config *adapters.HTTPAdapterConfig, endpointURL string) *AdformAdapter {
-	return NewAdformBidder(adapters.NewHTTPAdapter(config).Client, endpointURL)
+// Builder builds a new instance of the Adform adapter for the given bidder with the given config.
+func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters.Bidder, error) {
+	uri, err := url.Parse(config.Endpoint)
+	if err != nil {
+		return nil, errors.New("unable to parse endpoint")
+	}
+
+	bidder := &AdformAdapter{
+		URL:     uri,
+		version: version,
+	}
+	return bidder, nil
 }
 
 // used for cookies and such
@@ -118,13 +149,13 @@ func (a *AdformAdapter) Call(ctx context.Context, request *pbs.PBSRequest, bidde
 	responseBody := string(body)
 
 	if response.StatusCode == http.StatusBadRequest {
-		return nil, &adapters.BadInputError{
+		return nil, &errortypes.BadInput{
 			Message: fmt.Sprintf("HTTP status %d; body: %s", response.StatusCode, responseBody),
 		}
 	}
 
 	if response.StatusCode != 200 {
-		return nil, &adapters.BadServerResponseError{
+		return nil, &errortypes.BadServerResponse{
 			Message: fmt.Sprintf("HTTP status %d; body: %s", response.StatusCode, responseBody),
 		}
 	}
@@ -152,12 +183,12 @@ func pbsRequestToAdformRequest(a *AdformAdapter, request *pbs.PBSRequest, bidder
 		}
 		mid, err := adformAdUnit.MasterTagId.Int64()
 		if err != nil {
-			return nil, &adapters.BadInputError{
+			return nil, &errortypes.BadInput{
 				Message: err.Error(),
 			}
 		}
 		if mid <= 0 {
-			return nil, &adapters.BadInputError{
+			return nil, &errortypes.BadInput{
 				Message: fmt.Sprintf("master tag(placement) id is invalid=%s", adformAdUnit.MasterTagId),
 			}
 		}
@@ -167,6 +198,12 @@ func pbsRequestToAdformRequest(a *AdformAdapter, request *pbs.PBSRequest, bidder
 	}
 
 	userId, _, _ := request.Cookie.GetUID(a.Name())
+
+	gdprApplies := request.ParseGDPR()
+	if gdprApplies != "0" && gdprApplies != "1" {
+		gdprApplies = ""
+	}
+	consent := request.ParseConsent()
 
 	return &adformRequest{
 		adUnits:       adUnits,
@@ -178,6 +215,9 @@ func pbsRequestToAdformRequest(a *AdformAdapter, request *pbs.PBSRequest, bidder
 		referer:       request.Url,
 		userId:        userId,
 		tid:           request.Tid,
+		gdprApplies:   gdprApplies,
+		consent:       consent,
+		currency:      defaultCurrency,
 	}, nil
 }
 
@@ -185,7 +225,8 @@ func toPBSBidSlice(adformBids []*adformBid, r *adformRequest) pbs.PBSBidSlice {
 	bids := make(pbs.PBSBidSlice, 0)
 
 	for i, bid := range adformBids {
-		if bid.Banner == "" || bid.ResponseType != "banner" {
+		adm, bidType := getAdAndType(bid)
+		if adm == "" {
 			continue
 		}
 		pbsBid := pbs.PBSBid{
@@ -193,12 +234,12 @@ func toPBSBidSlice(adformBids []*adformBid, r *adformRequest) pbs.PBSBidSlice {
 			AdUnitCode:        r.adUnits[i].adUnitCode,
 			BidderCode:        r.bidderCode,
 			Price:             bid.Price,
-			Adm:               bid.Banner,
+			Adm:               adm,
 			Width:             bid.Width,
 			Height:            bid.Height,
 			DealId:            bid.DealId,
 			Creative_id:       bid.CreativeId,
-			CreativeMediaType: string(openrtb_ext.BidTypeBanner),
+			CreativeMediaType: string(bidType),
 		}
 
 		bids = append(bids, &pbsBid)
@@ -210,21 +251,60 @@ func toPBSBidSlice(adformBids []*adformBid, r *adformRequest) pbs.PBSBidSlice {
 // COMMON
 
 func (r *adformRequest) buildAdformUrl(a *AdformAdapter) string {
-	adUnitsParams := make([]string, 0, len(r.adUnits))
-	for _, adUnit := range r.adUnits {
-		str := fmt.Sprintf("mid=%s", adUnit.MasterTagId)
-		adUnitsParams = append(adUnitsParams, base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(str)))
+	parameters := url.Values{}
+
+	if r.advertisingId != "" {
+		parameters.Add("adid", r.advertisingId)
 	}
-	uri := a.URI
+	parameters.Add("CC", "1")
+	parameters.Add("rp", "4")
+	parameters.Add("fd", "1")
+	parameters.Add("stid", r.tid)
+	parameters.Add("ip", r.ip)
+
+	priceType := getValidPriceTypeParameter(r.adUnits)
+	if priceType != "" {
+		parameters.Add("pt", priceType)
+	}
+
+	parameters.Add("gdpr", r.gdprApplies)
+	parameters.Add("gdpr_consent", r.consent)
+	if r.eids != "" {
+		parameters.Add("eids", r.eids)
+	}
+
+	if r.url != "" {
+		parameters.Add("url", r.url)
+	}
+
+	URL := *a.URL
+	URL.RawQuery = parameters.Encode()
+
+	uri := URL.String()
 	if r.isSecure {
 		uri = strings.Replace(uri, "http://", "https://", 1)
 	}
-	adid := ""
-	if r.advertisingId != "" {
-		adid = fmt.Sprintf("&adid=%s", r.advertisingId)
+
+	adUnitsParams := make([]string, 0, len(r.adUnits))
+	for _, adUnit := range r.adUnits {
+		var buffer bytes.Buffer
+		buffer.WriteString(fmt.Sprintf("mid=%s&rcur=%s", adUnit.MasterTagId, r.currency))
+		if adUnit.KeyValues != "" {
+			buffer.WriteString(fmt.Sprintf("&mkv=%s", adUnit.KeyValues))
+		}
+		if adUnit.KeyWords != "" {
+			buffer.WriteString(fmt.Sprintf("&mkw=%s", adUnit.KeyWords))
+		}
+		if adUnit.CDims != "" {
+			buffer.WriteString(fmt.Sprintf("&cdims=%s", adUnit.CDims))
+		}
+		if adUnit.MinPrice > 0 {
+			buffer.WriteString(fmt.Sprintf("&minp=%.2f", adUnit.MinPrice))
+		}
+		adUnitsParams = append(adUnitsParams, base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buffer.Bytes()))
 	}
-	pt := getValidPriceTypeParameter(r.adUnits)
-	return fmt.Sprintf("%s/?CC=1&rp=4&fd=1&stid=%s&ip=%s%s%s&%s", uri, r.tid, r.ip, adid, pt, strings.Join(adUnitsParams, "&"))
+
+	return fmt.Sprintf("%s&%s", uri, strings.Join(adUnitsParams, "&"))
 }
 
 func getValidPriceTypeParameter(adUnits []*adformAdUnit) string {
@@ -243,7 +323,7 @@ func getValidPriceTypeParameter(adUnits []*adformAdUnit) string {
 	}
 
 	if valid {
-		priceTypeParameter = fmt.Sprintf("&pt=%s", priceType)
+		priceTypeParameter = priceType
 	}
 	return priceTypeParameter
 }
@@ -259,8 +339,9 @@ func (r *adformRequest) buildAdformHeaders(a *AdformAdapter) http.Header {
 	if r.referer != "" {
 		header.Set("Referer", r.referer)
 	}
+
 	if r.userId != "" {
-		header.Set("Cookie", fmt.Sprintf("uid=%s", r.userId))
+		header.Set("Cookie", fmt.Sprintf("uid=%s;", r.userId))
 	}
 
 	return header
@@ -269,7 +350,7 @@ func (r *adformRequest) buildAdformHeaders(a *AdformAdapter) http.Header {
 func parseAdformBids(response []byte) ([]*adformBid, error) {
 	var bids []*adformBid
 	if err := json.Unmarshal(response, &bids); err != nil {
-		return nil, &adapters.BadServerResponseError{
+		return nil, &errortypes.BadServerResponse{
 			Message: err.Error(),
 		}
 	}
@@ -279,17 +360,21 @@ func parseAdformBids(response []byte) ([]*adformBid, error) {
 
 // BIDDER Interface
 
-func NewAdformBidder(client *http.Client, endpointURL string) *AdformAdapter {
-	a := &adapters.HTTPAdapter{Client: client}
+func NewAdformLegacyAdapter(httpConfig *adapters.HTTPAdapterConfig, endpointURL string) *AdformAdapter {
+	var uriObj *url.URL
+	uriObj, err := url.Parse(endpointURL)
+	if err != nil {
+		panic(fmt.Sprintf("Incorrect Adform request url %s, check the configuration, please.", endpointURL))
+	}
 
 	return &AdformAdapter{
-		http:    a,
-		URI:     endpointURL,
-		version: "0.1.1",
+		http:    adapters.NewHTTPAdapter(httpConfig),
+		URL:     uriObj,
+		version: version,
 	}
 }
 
-func (a *AdformAdapter) MakeRequests(request *openrtb.BidRequest) ([]*adapters.RequestData, []error) {
+func (a *AdformAdapter) MakeRequests(request *openrtb.BidRequest, reqInfo *adapters.ExtraRequestInfo) ([]*adapters.RequestData, []error) {
 	adformRequest, errors := openRtbToAdformRequest(request)
 	if len(adformRequest.adUnits) == 0 {
 		return nil, errors
@@ -311,24 +396,19 @@ func openRtbToAdformRequest(request *openrtb.BidRequest) (*adformRequest, []erro
 	adUnits := make([]*adformAdUnit, 0, len(request.Imp))
 	errors := make([]error, 0, len(request.Imp))
 	secure := false
-	for _, imp := range request.Imp {
-		if imp.Banner == nil {
-			errors = append(errors, &adapters.BadInputError{
-				Message: fmt.Sprintf("Adform adapter supports only banner Imps for now. Ignoring Imp ID=%s", imp.ID),
-			})
-			continue
-		}
+	url := ""
 
+	for _, imp := range request.Imp {
 		params, _, _, err := jsonparser.Get(imp.Ext, "bidder")
 		if err != nil {
-			errors = append(errors, &adapters.BadInputError{
+			errors = append(errors, &errortypes.BadInput{
 				Message: err.Error(),
 			})
 			continue
 		}
 		var adformAdUnit adformAdUnit
 		if err := json.Unmarshal(params, &adformAdUnit); err != nil {
-			errors = append(errors, &adapters.BadInputError{
+			errors = append(errors, &errortypes.BadInput{
 				Message: err.Error(),
 			})
 			continue
@@ -336,13 +416,13 @@ func openRtbToAdformRequest(request *openrtb.BidRequest) (*adformRequest, []erro
 
 		mid, err := adformAdUnit.MasterTagId.Int64()
 		if err != nil {
-			errors = append(errors, &adapters.BadInputError{
+			errors = append(errors, &errortypes.BadInput{
 				Message: err.Error(),
 			})
 			continue
 		}
 		if mid <= 0 {
-			errors = append(errors, &adapters.BadInputError{
+			errors = append(errors, &errortypes.BadInput{
 				Message: fmt.Sprintf("master tag(placement) id is invalid=%s", adformAdUnit.MasterTagId),
 			})
 			continue
@@ -350,6 +430,10 @@ func openRtbToAdformRequest(request *openrtb.BidRequest) (*adformRequest, []erro
 
 		if !secure && imp.Secure != nil && *imp.Secure == 1 {
 			secure = true
+		}
+
+		if url == "" {
+			url = adformAdUnit.Url
 		}
 
 		adformAdUnit.bidId = imp.ID
@@ -367,6 +451,43 @@ func openRtbToAdformRequest(request *openrtb.BidRequest) (*adformRequest, []erro
 		tid = request.Source.TID
 	}
 
+	gdprApplies := ""
+	var extRegs openrtb_ext.ExtRegs
+	if request.Regs != nil && request.Regs.Ext != nil {
+		if err := json.Unmarshal(request.Regs.Ext, &extRegs); err != nil {
+			errors = append(errors, &errortypes.BadInput{
+				Message: err.Error(),
+			})
+		}
+		if extRegs.GDPR != nil && (*extRegs.GDPR == 0 || *extRegs.GDPR == 1) {
+			gdprApplies = strconv.Itoa(int(*extRegs.GDPR))
+		}
+	}
+
+	eids := ""
+	consent := ""
+	if request.User != nil && request.User.Ext != nil {
+		var extUser openrtb_ext.ExtUser
+		if err := json.Unmarshal(request.User.Ext, &extUser); err == nil {
+			consent = extUser.Consent
+			eids = encodeEids(extUser.Eids)
+		}
+	}
+
+	requestCurrency := defaultCurrency
+	if len(request.Cur) != 0 {
+		hasDefaultCurrency := false
+		for _, c := range request.Cur {
+			if defaultCurrency == c {
+				hasDefaultCurrency = true
+				break
+			}
+		}
+		if !hasDefaultCurrency {
+			requestCurrency = request.Cur[0]
+		}
+	}
+
 	return &adformRequest{
 		adUnits:       adUnits,
 		ip:            getIPSafely(request.Device),
@@ -376,7 +497,36 @@ func openRtbToAdformRequest(request *openrtb.BidRequest) (*adformRequest, []erro
 		referer:       referer,
 		userId:        getBuyerUIDSafely(request.User),
 		tid:           tid,
+		gdprApplies:   gdprApplies,
+		consent:       consent,
+		currency:      requestCurrency,
+		eids:          eids,
+		url:           url,
 	}, errors
+}
+
+func encodeEids(eids []openrtb_ext.ExtUserEid) string {
+	if eids == nil {
+		return ""
+	}
+
+	eidsMap := make(map[string]map[string][]int)
+	for _, eid := range eids {
+		_, ok := eidsMap[eid.Source]
+		if !ok {
+			eidsMap[eid.Source] = make(map[string][]int)
+		}
+		for _, uid := range eid.Uids {
+			eidsMap[eid.Source][uid.ID] = append(eidsMap[eid.Source][uid.ID], uid.Atype)
+		}
+	}
+
+	encodedEids := ""
+	if eidsString, err := json.Marshal(eidsMap); err == nil {
+		encodedEids = base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(eidsString)
+	}
+
+	return encodedEids
 }
 
 func getIPSafely(device *openrtb.Device) string {
@@ -413,13 +563,13 @@ func (a *AdformAdapter) MakeBids(internalRequest *openrtb.BidRequest, externalRe
 	}
 
 	if response.StatusCode == http.StatusBadRequest {
-		return nil, []error{&adapters.BadInputError{
+		return nil, []error{&errortypes.BadInput{
 			Message: fmt.Sprintf("unexpected status code: %d. Run with request.debug = 1 for more info", response.StatusCode),
 		}}
 	}
 
 	if response.StatusCode != http.StatusOK {
-		return nil, []error{&adapters.BadServerResponseError{
+		return nil, []error{&errortypes.BadServerResponse{
 			Message: fmt.Sprintf("unexpected status code: %d. Run with request.debug = 1 for more info", response.StatusCode),
 		}}
 	}
@@ -436,24 +586,43 @@ func (a *AdformAdapter) MakeBids(internalRequest *openrtb.BidRequest, externalRe
 
 func toOpenRtbBidResponse(adformBids []*adformBid, r *openrtb.BidRequest) *adapters.BidderResponse {
 	bidResponse := adapters.NewBidderResponseWithBidsCapacity(len(adformBids))
+	currency := bidResponse.Currency
+
+	if len(adformBids) > 0 {
+		bidResponse.Currency = adformBids[0].Currency
+	}
 
 	for i, bid := range adformBids {
-		if bid.Banner == "" || bid.ResponseType != "banner" {
+		adm, bidType := getAdAndType(bid)
+		if adm == "" {
 			continue
 		}
+
 		openRtbBid := openrtb.Bid{
 			ID:     r.Imp[i].ID,
 			ImpID:  r.Imp[i].ID,
 			Price:  bid.Price,
-			AdM:    bid.Banner,
+			AdM:    adm,
 			W:      bid.Width,
 			H:      bid.Height,
 			DealID: bid.DealId,
 			CrID:   bid.CreativeId,
 		}
 
-		bidResponse.Bids = append(bidResponse.Bids, &adapters.TypedBid{Bid: &openRtbBid, BidType: openrtb_ext.BidTypeBanner})
+		bidResponse.Bids = append(bidResponse.Bids, &adapters.TypedBid{Bid: &openRtbBid, BidType: bidType})
+		currency = bid.Currency
 	}
 
+	bidResponse.Currency = currency
+
 	return bidResponse
+}
+
+func getAdAndType(bid *adformBid) (string, openrtb_ext.BidType) {
+	if bid.ResponseType == "banner" {
+		return bid.Banner, openrtb_ext.BidTypeBanner
+	} else if bid.ResponseType == "vast_content" {
+		return bid.VastContent, openrtb_ext.BidTypeVideo
+	}
+	return "", ""
 }

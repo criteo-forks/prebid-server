@@ -1,5 +1,6 @@
 maintainer:
-  email: "mmartinho@e-planning.net"
+  email: "producto@e-planning.net"
+gvlVendorID: 90
 capabilities:
   app:
     mediaTypes:

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"regexp"
 	"testing"
 
 	"github.com/mxmCherry/openrtb"
@@ -50,13 +51,15 @@ import (
 //   }
 //
 func RunJSONBidderTest(t *testing.T, rootDir string, bidder adapters.Bidder) {
-	runTests(t, fmt.Sprintf("%s/exemplary", rootDir), bidder, false)
-	runTests(t, fmt.Sprintf("%s/supplemental", rootDir), bidder, true)
+	runTests(t, fmt.Sprintf("%s/exemplary", rootDir), bidder, false, false, false)
+	runTests(t, fmt.Sprintf("%s/supplemental", rootDir), bidder, true, false, false)
+	runTests(t, fmt.Sprintf("%s/amp", rootDir), bidder, true, true, false)
+	runTests(t, fmt.Sprintf("%s/video", rootDir), bidder, false, false, true)
 }
 
 // runTests runs all the *.json files in a directory. If allowErrors is false, and one of the test files
 // expects errors from the bidder, then the test will fail.
-func runTests(t *testing.T, directory string, bidder adapters.Bidder, allowErrors bool) {
+func runTests(t *testing.T, directory string, bidder adapters.Bidder, allowErrors, isAmpTest, isVideoTest bool) {
 	if specFiles, err := ioutil.ReadDir(directory); err == nil {
 		for _, specFile := range specFiles {
 			fileName := fmt.Sprintf("%s/%s", directory, specFile.Name())
@@ -68,7 +71,7 @@ func runTests(t *testing.T, directory string, bidder adapters.Bidder, allowError
 			if !allowErrors && specData.expectsErrors() {
 				t.Fatalf("Exemplary spec %s must not expect errors.", fileName)
 			}
-			runSpec(t, fileName, specData, bidder)
+			runSpec(t, fileName, specData, bidder, isAmpTest, isVideoTest)
 		}
 	}
 }
@@ -96,8 +99,15 @@ func loadFile(filename string) (*testSpec, error) {
 //   - That the Bidder's errors match the spec's expectations
 //
 // More assertions will almost certainly be added in the future, as bugs come up.
-func runSpec(t *testing.T, filename string, spec *testSpec, bidder adapters.Bidder) {
-	actualReqs, errs := bidder.MakeRequests(&spec.BidRequest)
+func runSpec(t *testing.T, filename string, spec *testSpec, bidder adapters.Bidder, isAmpTest, isVideoTest bool) {
+	reqInfo := adapters.ExtraRequestInfo{}
+	if isAmpTest {
+		// simulates AMP entry point
+		reqInfo.PbsEntryPoint = "amp"
+	} else if isVideoTest {
+		reqInfo.PbsEntryPoint = "video"
+	}
+	actualReqs, errs := bidder.MakeRequests(&spec.BidRequest, &reqInfo)
 	diffErrorLists(t, fmt.Sprintf("%s: MakeRequests", filename), errs, spec.MakeRequestErrors)
 	diffHttpRequestLists(t, filename, actualReqs, spec.HttpCalls)
 
@@ -113,16 +123,21 @@ func runSpec(t *testing.T, filename string, spec *testSpec, bidder adapters.Bidd
 	diffErrorLists(t, fmt.Sprintf("%s: MakeBids", filename), bidsErrs, spec.MakeBidsErrors)
 
 	for i := 0; i < len(spec.BidResponses); i++ {
-		diffBidLists(t, filename, bidResponses[i].Bids, spec.BidResponses[i].Bids)
+		diffBidLists(t, filename, bidResponses[i], spec.BidResponses[i].Bids)
 	}
 }
 
 type testSpec struct {
-	BidRequest        openrtb.BidRequest    `json:"mockBidRequest"`
-	HttpCalls         []httpCall            `json:"httpCalls"`
-	BidResponses      []expectedBidResponse `json:"expectedBidResponses"`
-	MakeRequestErrors []string              `json:"expectedMakeRequestsErrors"`
-	MakeBidsErrors    []string              `json:"expectedMakeBidsErrors"`
+	BidRequest        openrtb.BidRequest      `json:"mockBidRequest"`
+	HttpCalls         []httpCall              `json:"httpCalls"`
+	BidResponses      []expectedBidResponse   `json:"expectedBidResponses"`
+	MakeRequestErrors []testSpecExpectedError `json:"expectedMakeRequestsErrors"`
+	MakeBidsErrors    []testSpecExpectedError `json:"expectedMakeBidsErrors"`
+}
+
+type testSpecExpectedError struct {
+	Value      string `json:"value"`
+	Comparison string `json:"comparison"`
 }
 
 func (spec *testSpec) expectsErrors() bool {
@@ -149,14 +164,16 @@ type httpRequest struct {
 }
 
 type httpResponse struct {
-	Status int             `json:"status"`
-	Body   json.RawMessage `json:"body"`
+	Status  int             `json:"status"`
+	Body    json.RawMessage `json:"body"`
+	Headers http.Header     `json:"headers"`
 }
 
 func (resp *httpResponse) ToResponseData(t *testing.T) *adapters.ResponseData {
 	return &adapters.ResponseData{
 		StatusCode: resp.Status,
 		Body:       resp.Body,
+		Headers:    resp.Headers,
 	}
 }
 
@@ -189,21 +206,44 @@ func diffHttpRequestLists(t *testing.T, filename string, actual []*adapters.Requ
 	}
 }
 
-func diffErrorLists(t *testing.T, description string, actual []error, expected []string) {
+func diffErrorLists(t *testing.T, description string, actual []error, expected []testSpecExpectedError) {
 	t.Helper()
 
 	if len(expected) != len(actual) {
-		t.Fatalf("%s had wrong error count. Expected %d, got %d", description, len(expected), len(actual))
+		t.Fatalf("%s had wrong error count. Expected %d, got %d (%v)", description, len(expected), len(actual), actual)
 	}
 	for i := 0; i < len(actual); i++ {
-		if expected[i] != actual[i].Error() {
-			t.Errorf(`%s error[%d] had wrong message. Expected "%s", got "%s"`, description, i, expected[i], actual[i].Error())
+		if expected[i].Comparison == "literal" {
+			if expected[i].Value != actual[i].Error() {
+				t.Errorf(`%s error[%d] had wrong message. Expected "%s", got "%s"`, description, i, expected[i].Value, actual[i].Error())
+			}
+		} else if expected[i].Comparison == "regex" {
+			if matched, _ := regexp.MatchString(expected[i].Value, actual[i].Error()); !matched {
+				t.Errorf(`%s error[%d] had wrong message. Expected match with regex "%s", got "%s"`, description, i, expected[i].Value, actual[i].Error())
+			}
+		} else {
+			t.Fatalf(`invalid comparison type "%s"`, expected[i].Comparison)
 		}
 	}
 }
 
-func diffBidLists(t *testing.T, filename string, actual []*adapters.TypedBid, expected []expectedBid) {
+func diffBidLists(t *testing.T, filename string, response *adapters.BidderResponse, expected []expectedBid) {
 	t.Helper()
+
+	if (response == nil || len(response.Bids) == 0) != (len(expected) == 0) {
+		if len(expected) == 0 {
+			t.Fatalf("%s: expectedBidResponses indicated a nil response, but mockResponses supplied a non-nil response", filename)
+		}
+
+		t.Fatalf("%s: mockResponses included unexpected nil or empty response", filename)
+	}
+
+	// Expected nil response - give diffBids something to work with.
+	if response == nil {
+		response = new(adapters.BidderResponse)
+	}
+
+	actual := response.Bids
 
 	if len(actual) != len(expected) {
 		t.Fatalf("%s: MakeBids returned wrong bid count. Expected %d, got %d", filename, len(expected), len(actual))
@@ -222,6 +262,11 @@ func diffHttpRequests(t *testing.T, description string, actual *adapters.Request
 	}
 
 	diffStrings(t, fmt.Sprintf("%s.uri", description), actual.Uri, expected.Uri)
+	if expected.Headers != nil {
+		actualHeader, _ := json.Marshal(actual.Headers)
+		expectedHeader, _ := json.Marshal(expected.Headers)
+		diffJson(t, description, actualHeader, expectedHeader)
+	}
 	diffJson(t, description, actual.Body, expected.Body)
 }
 
@@ -273,7 +318,7 @@ func diffJson(t *testing.T, description string, actual []byte, expected []byte) 
 	if diff.Modified() {
 		var left interface{}
 		if err := json.Unmarshal(actual, &left); err != nil {
-			t.Fatalf("%s json did not match, but unmarhsalling failed. %v", description, err)
+			t.Fatalf("%s json did not match, but unmarshalling failed. %v", description, err)
 		}
 		printer := formatter.NewAsciiFormatter(left, formatter.AsciiFormatterConfig{
 			ShowArrayIndex: true,

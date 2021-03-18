@@ -13,8 +13,8 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"github.com/prebid/prebid-server/analytics"
 	"github.com/prebid/prebid-server/config"
-	"github.com/prebid/prebid-server/pbsmetrics"
-	"github.com/prebid/prebid-server/ssl"
+	"github.com/prebid/prebid-server/metrics"
+	"github.com/prebid/prebid-server/server/ssl"
 	"github.com/prebid/prebid-server/usersync"
 )
 
@@ -27,16 +27,6 @@ const (
 	USERSYNC_SUCCESS     = "usersync.%s.sets"
 )
 
-type HostCookieSettings struct {
-	Domain       string
-	Family       string
-	CookieName   string
-	OptOutURL    string
-	OptInURL     string
-	OptOutCookie config.Cookie
-	TTL          time.Duration
-}
-
 // uidWithExpiry bundles the UID with an Expiration date.
 // After the expiration, the UID is no longer valid.
 type uidWithExpiry struct {
@@ -47,29 +37,11 @@ type uidWithExpiry struct {
 }
 
 type UserSyncDeps struct {
-	ExternalUrl        string
-	RecaptchaSecret    string
-	HostCookieSettings *HostCookieSettings
-	MetricsEngine      pbsmetrics.MetricsEngine
-	PBSAnalytics       analytics.PBSAnalyticsModule
-}
-
-// pbsCookieJson defines the JSON contract for the cookie data's storage format.
-//
-// This exists so that PBSCookie (which is public) can have private fields, and the rest of
-// PBS doesn't have to worry about the cookie data storage format.
-type pbsCookieJson struct {
-	LegacyUIDs map[string]string        `json:"uids,omitempty"`
-	UIDs       map[string]uidWithExpiry `json:"tempUIDs,omitempty"`
-	OptOut     bool                     `json:"optout,omitempty"`
-	Birthday   *time.Time               `json:"bday,omitempty"`
-}
-
-func (deps *UserSyncDeps) GetUIDs(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	pc := usersync.ParsePBSCookieFromRequest(r, &deps.HostCookieSettings.OptOutCookie)
-	pc.SetCookieOnResponse(w, deps.HostCookieSettings.Domain, deps.HostCookieSettings.TTL)
-	json.NewEncoder(w).Encode(pc)
-	return
+	ExternalUrl      string
+	RecaptchaSecret  string
+	HostCookieConfig *config.HostCookie
+	MetricsEngine    metrics.MetricsEngine
+	PBSAnalytics     analytics.PBSAnalyticsModule
 }
 
 // Struct for parsing json in google's response
@@ -120,13 +92,14 @@ func (deps *UserSyncDeps) OptOut(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 
-	pc := usersync.ParsePBSCookieFromRequest(r, &deps.HostCookieSettings.OptOutCookie)
+	pc := usersync.ParsePBSCookieFromRequest(r, deps.HostCookieConfig)
 	pc.SetPreference(optout == "")
 
-	pc.SetCookieOnResponse(w, deps.HostCookieSettings.Domain, deps.HostCookieSettings.TTL)
+	pc.SetCookieOnResponse(w, false, deps.HostCookieConfig, deps.HostCookieConfig.TTLDuration())
+
 	if optout == "" {
-		http.Redirect(w, r, deps.HostCookieSettings.OptInURL, 301)
+		http.Redirect(w, r, deps.HostCookieConfig.OptInURL, 301)
 	} else {
-		http.Redirect(w, r, deps.HostCookieSettings.OptOutURL, 301)
+		http.Redirect(w, r, deps.HostCookieConfig.OptOutURL, 301)
 	}
 }

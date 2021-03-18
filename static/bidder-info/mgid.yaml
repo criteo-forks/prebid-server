@@ -1,0 +1,12 @@
+maintainer:
+  email: "prebid@mgid.com"
+gvlVendorID: 358
+capabilities:
+  app:
+    mediaTypes:
+      - banner
+      - native
+  site:
+    mediaTypes:
+      - banner
+      - native
