@@ -54,7 +54,7 @@ func main() {
 	}
 }
 
-const configFileName = "pbs"
+const configFileName = "criteo"
 const infoDirectory = "./static/bidder-info"
 
 func loadConfig(bidderInfos config.BidderInfos) (*config.Configuration, error) {
