@@ -108,7 +108,8 @@
                   "w": 300,
                   "ext": {
                     "prebid": {
-                      "type": "video"
+                      "type": "video",
+                      "networkName": "Criteo"
                     }
                   }
                 }
@@ -134,7 +135,8 @@
             "w": 300,
             "ext": {
               "prebid": {
-                "type": "video"
+                "type": "video",
+                "networkName": "Criteo"
               }
             }
           },

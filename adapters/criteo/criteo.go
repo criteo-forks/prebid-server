@@ -86,10 +86,21 @@ func (a *adapter) MakeBids(request *openrtb2.BidRequest, requestData *adapters.R
 			b := &adapters.TypedBid{
 				Bid:     &seatBid.Bid[i],
 				BidType: bidExt.Prebid.BidType,
+				BidMeta: getBidMeta(bidExt),
 			}
 			bidResponse.Bids = append(bidResponse.Bids, b)
 		}
 	}
 
 	return bidResponse, nil
+}
+
+func getBidMeta(ext BidExt) *openrtb_ext.ExtBidPrebidMeta {
+	var bidMeta *openrtb_ext.ExtBidPrebidMeta
+	if ext.Prebid.NetworkName != "" {
+		bidMeta = &openrtb_ext.ExtBidPrebidMeta{
+			NetworkName: ext.Prebid.NetworkName,
+		}
+	}
+	return bidMeta
 }
