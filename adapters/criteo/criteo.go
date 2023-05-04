@@ -16,7 +16,7 @@ type adapter struct {
 	endpoint string
 }
 
-type CriteoBidExt struct {
+type BidExt struct {
 	Prebid ExtPrebid `json:"prebid"`
 }
 
@@ -76,20 +76,36 @@ func (a *adapter) MakeBids(request *openrtb2.BidRequest, requestData *adapters.R
 
 	for _, seatBid := range response.SeatBid {
 		for i := range seatBid.Bid {
-			var bidExt CriteoBidExt
+			var bidExt BidExt
 			if err := json.Unmarshal(seatBid.Bid[i].Ext, &bidExt); err != nil {
 				return nil, []error{&errortypes.BadServerResponse{
 					Message: fmt.Sprintf("Missing ext.prebid.type in bid for impression : %s.", seatBid.Bid[i].ImpID),
 				}}
 			}
 
+			bidMeta, err := getBidMeta(bidExt)
+			if err != nil {
+				return nil, []error{err}
+			}
+
 			b := &adapters.TypedBid{
 				Bid:     &seatBid.Bid[i],
 				BidType: bidExt.Prebid.BidType,
+				BidMeta: bidMeta,
 			}
 			bidResponse.Bids = append(bidResponse.Bids, b)
 		}
 	}
 
 	return bidResponse, nil
+}
+
+func getBidMeta(ext BidExt) (*openrtb_ext.ExtBidPrebidMeta, error) {
+	var bidMeta *openrtb_ext.ExtBidPrebidMeta
+	if ext.Prebid.NetworkName != "" {
+		bidMeta = &openrtb_ext.ExtBidPrebidMeta{
+			NetworkName: ext.Prebid.NetworkName,
+		}
+	}
+	return bidMeta, nil
 }
